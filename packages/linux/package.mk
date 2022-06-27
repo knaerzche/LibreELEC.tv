@@ -29,8 +29,11 @@ case "${LINUX}" in
     ;;
   *)
     PKG_VERSION="5.18.7"
+    PKG_VERSION="5.19-rc4"
     PKG_SHA256="a1a2d064bf5a1f02021f66931237ec3d2920994d49910d27d3fe581e2e21525b"
+    PKG_SHA256=""
     PKG_URL="https://www.kernel.org/pub/linux/kernel/v5.x/${PKG_NAME}-${PKG_VERSION}.tar.xz"
+    PKG_URL="https://git.kernel.org/torvalds/t/linux-${PKG_VERSION}.tar.gz"
     PKG_PATCH_DIRS="default"
     ;;
 esac
