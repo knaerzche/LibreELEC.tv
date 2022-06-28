@@ -63,30 +63,6 @@ index 5d1d50e4fd57..18f36e8546d9 100644
  
 
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Jonas Karlman <jonas@kwiboo.se>
-Date: Sat, 23 May 2020 11:23:04 +0000
-Subject: [PATCH] WIP: media: rkvdec: h264: return early when no reference
- pictures
-
-Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
----
- drivers/staging/media/rkvdec/rkvdec-h264.c | 18 +++++-------------
- 1 file changed, 5 insertions(+), 13 deletions(-)
-
-diff --git a/drivers/staging/media/rkvdec/rkvdec-h264.c b/drivers/staging/media/rkvdec/rkvdec-h264.c
-index c9a551dbd9bc..6ce11b736363 100644
-@@ -741,6 +742,9 @@ static void assemble_hw_rps(struct rkvdec_ctx *ctx,
- 
- 	memset(hw_rps, 0, sizeof(priv_tbl->rps));
- 
-+	if (!h264_ctx->reflists.num_valid)
-+		return;
-+
- 	/*
- 	 * Assign an invalid pic_num if DPB entry at that position is inactive.
- 	 * If we assign 0 in that position hardware will treat that as a real
-
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Randy Li <ayaka@soulik.info>
 Date: Sun, 6 Jan 2019 01:48:37 +0800
 Subject: [PATCH] soc: rockchip: power-domain: export idle request
