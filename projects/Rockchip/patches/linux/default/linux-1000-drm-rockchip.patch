@@ -1278,7 +1278,7 @@ diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockc
 index 9af45fdfbd19..134c2db8d0fe 100644
 --- a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
 +++ b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
-@@ -68,6 +68,7 @@ struct rockchip_hdmi {
+@@ -73,6 +73,7 @@ struct rockchip_hdmi {
  	struct device *dev;
  	struct regmap *regmap;
  	struct rockchip_encoder encoder;
@@ -1286,6 +1286,16 @@ index 9af45fdfbd19..134c2db8d0fe 100644
  	const struct rockchip_hdmi_chip_data *chip_data;
  	struct clk *vpll_clk;
  	struct clk *grf_clk;
+@@ -89,6 +89,9 @@ struct rockchip_hdmi {
+ 
+ 	return container_of(rkencoder, struct rockchip_hdmi, encoder);
+ }
++
++#define to_crtc_state(x)	container_of(x, struct drm_crtc_state, x)
++#define to_rockchip_hdmi_bridge(x)	container_of(x, struct rockchip_hdmi, x)
+ 
+ static const struct dw_hdmi_mpll_config rockchip_mpll_cfg[] = {
+ 	{
 @@ -315,30 +316,20 @@ dw_hdmi_rockchip_mode_valid(struct dw_hdmi *hdmi, void *data,
  	return drm_mode_validate_size(mode, 3840, 2160);
  }
@@ -1297,7 +1307,7 @@ index 9af45fdfbd19..134c2db8d0fe 100644
 +				 const struct drm_display_mode *adjusted_mode)
  {
 -}
-+	struct rockchip_hdmi *hdmi = to_rockchip_hdmi(bridge);
++	struct rockchip_hdmi *hdmi = to_rockchip_hdmi_bridge(bridge);
  
 -static bool
 -dw_hdmi_rockchip_encoder_mode_fixup(struct drm_encoder *encoder,
@@ -1321,7 +1331,7 @@ index 9af45fdfbd19..134c2db8d0fe 100644
 -static void dw_hdmi_rockchip_encoder_enable(struct drm_encoder *encoder)
 -{
 -	struct rockchip_hdmi *hdmi = to_rockchip_hdmi(encoder);
-+	struct rockchip_hdmi *hdmi = to_rockchip_hdmi(bridge);
++	struct rockchip_hdmi *hdmi = to_rockchip_hdmi_bridge(bridge);
 +	struct drm_encoder *encoder = bridge->encoder;
  	u32 val;
  	int ret;
@@ -2217,19 +2227,10 @@ diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockc
 index 134c2db8d0fe..cba63dd5e8c8 100644
 --- a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
 +++ b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
-@@ -77,6 +77,8 @@ struct rockchip_hdmi {
- 
- 	return container_of(rkencoder, struct rockchip_hdmi, encoder);
- }
-+
-+#define to_crtc_state(x)	container_of(x, struct drm_crtc_state, x)
- 
- static const struct dw_hdmi_mpll_config rockchip_mpll_cfg[] = {
- 	{
 @@ -322,6 +323,11 @@ dw_hdmi_rockchip_bridge_mode_set(struct drm_bridge *bridge,
  				 const struct drm_display_mode *adjusted_mode)
  {
- 	struct rockchip_hdmi *hdmi = to_rockchip_hdmi(bridge);
+ 	struct rockchip_hdmi *hdmi = to_rockchip_hdmi_bridge(bridge);
 +	struct drm_crtc_state *crtc_state = to_crtc_state(adjusted_mode);
 +	struct rockchip_crtc_state *s = to_rockchip_crtc_state(crtc_state);
 +
@@ -2292,7 +2293,7 @@ index 134c2db8d0fe..cba63dd5e8c8 100644
  					u32 output_fmt,
  					unsigned int *num_input_fmts)
  {
-+	struct rockchip_hdmi *hdmi = to_rockchip_hdmi(bridge);
++	struct rockchip_hdmi *hdmi = to_rockchip_hdmi_bridge(bridge);
 +	struct drm_encoder *encoder = bridge->encoder;
  	u32 *input_fmt;
 +	bool has_10bit = true;
@@ -2636,7 +2637,7 @@ index 6429892ac4df..257770ea2dc7 100644
  		old_state = to_rockchip_crtc_state(old_crtc_state);
 @@ -445,6 +462,7 @@ static u32 *dw_hdmi_rockchip_get_input_bus_fmts(struct drm_bridge *bridge,
  {
- 	struct rockchip_hdmi *hdmi = to_rockchip_hdmi(bridge);
+ 	struct rockchip_hdmi *hdmi = to_rockchip_hdmi_bridge(bridge);
  	struct drm_encoder *encoder = bridge->encoder;
 +	struct drm_connector *connector = conn_state->connector;
  	u32 *input_fmt;
