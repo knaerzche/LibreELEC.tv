@@ -328,21 +328,6 @@ Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
  drivers/staging/media/rkvdec/rkvdec.h |  2 +
  2 files changed, 55 insertions(+), 6 deletions(-)
 
-diff --git a/drivers/staging/media/rkvdec/rkvdec-h264.c b/drivers/staging/media/rkvdec/rkvdec-h264.c
-index d4ae792874bb..3cbb1d26b972 100644
---- a/drivers/staging/media/rkvdec/rkvdec-h264.c
-+++ b/drivers/staging/media/rkvdec/rkvdec-h264.c
-@@ -1047,6 +1047,10 @@ static int rkvdec_h264_validate_sps
- 		/* Only 8-bit is supported */
- 		return -EINVAL;
- 
-+	if (ctx->valid_fmt && ctx->valid_fmt != rkvdec_valid_fmt(ctx, ctrl))
-+		/* Only current valid format */
-+		return -EINVAL;
-+
- 	width = (sps->pic_width_in_mbs_minus1 + 1) * 16;
- 	height = (sps->pic_height_in_map_units_minus1 + 1) * 16;
- 
 diff --git a/drivers/staging/media/rkvdec/rkvdec.c b/drivers/staging/media/rkvdec/rkvdec.c
 index d4ae792874bb..3cbb1d26b972 100644
 --- a/drivers/staging/media/rkvdec/rkvdec.c
