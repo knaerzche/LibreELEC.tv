@@ -163,29 +163,36 @@ index 000000000000..720b3314e71a
 +
 +#endif /* _LINUX_ROCKCHIP_PM_H */
 diff --git a/include/soc/rockchip/pm_domains.h b/include/soc/rockchip/pm_domains.h
-new file mode 100644
-index 000000000000..690db6118636
---- /dev/null
+index 089f11d21b25..3f4772c8d095 100644
++++ a/include/soc/rockchip/pm_domains.h
 +++ b/include/soc/rockchip/pm_domains.h
-@@ -0,0 +1,18 @@
-+/* SPDX-License-Identifier: GPL-2.0 */
-+#ifndef __SOC_ROCKCHIP_PM_DOMAINS_H
-+#define __SOC_ROCKCHIP_PM_DOMAINS_H
-+
+@@ -6,10 +6,15 @@
+ #ifndef __SOC_ROCKCHIP_PM_DOMAINS_H__
+ #define __SOC_ROCKCHIP_PM_DOMAINS_H__
+ 
 +#include <linux/errno.h>
 +
 +struct device;
 +
-+#ifdef CONFIG_ROCKCHIP_PM_DOMAINS
+ #ifdef CONFIG_ROCKCHIP_PM_DOMAINS
+ 
+ int rockchip_pmu_block(void);
+ void rockchip_pmu_unblock(void);
 +int rockchip_pmu_idle_request(struct device *dev, bool idle);
-+#else
+ 
+ #else /* CONFIG_ROCKCHIP_PM_DOMAINS */
+ 
+@@ -20,6 +25,10 @@
+ 
+ static inline void rockchip_pmu_unblock(void) { }
+ 
 +static inline int rockchip_pmu_idle_request(struct device *dev, bool idle)
 +{
 +	return -ENOTSUPP;
 +}
-+#endif
-+
-+#endif
+ #endif /* CONFIG_ROCKCHIP_PM_DOMAINS */
+ 
+ #endif /* __SOC_ROCKCHIP_PM_DOMAINS_H__ */
 
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Alex Bee <knaerzche@gmail.com>
@@ -641,9 +648,9 @@ index 19b31bef0bb3..63385d92880e 100644
 -		.decoded_fmts = rkvdec_h264_vp9_decoded_fmts,
 +		.num_decoded_fmts = ARRAY_SIZE(rkvdec_h264_decoded_fmts),
 +		.decoded_fmts = rkvdec_h264_decoded_fmts,
+ 		.subsystem_flags = VB2_V4L2_FL_SUPPORTS_M2M_HOLD_CAPTURE_BUF,
  	},
  	{
- 		.fourcc = V4L2_PIX_FMT_VP9_FRAME,
 @@ -207,8 +211,8 @@ static const struct rkvdec_coded_fmt_desc rkvdec_coded_fmts[] = {
  		},
  		.ctrls = &rkvdec_vp9_ctrls,

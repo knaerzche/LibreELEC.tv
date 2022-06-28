@@ -98,17 +98,20 @@ index a25b98b7f5bd..91ded8a096ba 100644
  static enum vop_data_format vop_convert_format(uint32_t format)
  {
  	switch (format) {
-@@ -277,10 +289,13 @@ static enum vop_data_format vop_convert_format(uint32_t format)
+@@ -277,13 +289,16 @@ static enum vop_data_format vop_convert_format(uint32_t format)
  	case DRM_FORMAT_BGR565:
  		return VOP_FMT_RGB565;
  	case DRM_FORMAT_NV12:
 +	case DRM_FORMAT_NV15:
+ 	case DRM_FORMAT_NV21:
  		return VOP_FMT_YUV420SP;
  	case DRM_FORMAT_NV16:
 +	case DRM_FORMAT_NV20:
+ 	case DRM_FORMAT_NV61:
  		return VOP_FMT_YUV422SP;
  	case DRM_FORMAT_NV24:
 +	case DRM_FORMAT_NV30:
+	case DRM_FORMAT_NV42:
  		return VOP_FMT_YUV444SP;
  	default:
  		DRM_ERROR("unsupported format[%08x]\n", format);

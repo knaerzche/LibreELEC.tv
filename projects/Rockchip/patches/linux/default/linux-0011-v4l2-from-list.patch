@@ -328,6 +328,21 @@ Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
  drivers/staging/media/rkvdec/rkvdec.h |  2 +
  2 files changed, 55 insertions(+), 6 deletions(-)
 
+diff --git a/drivers/staging/media/rkvdec/rkvdec-h264.c b/drivers/staging/media/rkvdec/rkvdec-h264.c
+index d4ae792874bb..3cbb1d26b972 100644
+--- a/drivers/staging/media/rkvdec/rkvdec-h264.c
++++ b/drivers/staging/media/rkvdec/rkvdec-h264.c
+@@ -1047,6 +1047,10 @@ static int rkvdec_h264_validate_sps
+ 		/* Only 8-bit is supported */
+ 		return -EINVAL;
+ 
++	if (ctx->valid_fmt && ctx->valid_fmt != rkvdec_valid_fmt(ctx, ctrl))
++		/* Only current valid format */
++		return -EINVAL;
++
+ 	width = (sps->pic_width_in_mbs_minus1 + 1) * 16;
+ 	height = (sps->pic_height_in_map_units_minus1 + 1) * 16;
+ 
 diff --git a/drivers/staging/media/rkvdec/rkvdec.c b/drivers/staging/media/rkvdec/rkvdec.c
 index d4ae792874bb..3cbb1d26b972 100644
 --- a/drivers/staging/media/rkvdec/rkvdec.c
@@ -349,17 +364,6 @@ index d4ae792874bb..3cbb1d26b972 100644
  static int rkvdec_try_ctrl(struct v4l2_ctrl *ctrl)
  {
  	struct rkvdec_ctx *ctx = container_of(ctrl->handler, struct rkvdec_ctx, ctrl_hdl);
-@@ -60,6 +70,10 @@ static int rkvdec_try_ctrl(struct v4l2_ctrl *ctrl)
- 			/* Only 8-bit is supported */
- 			return -EINVAL;
- 
-+		if (ctx->valid_fmt && ctx->valid_fmt != rkvdec_valid_fmt(ctx, ctrl))
-+			/* Only current valid format */
-+			return -EINVAL;
-+
- 		width = (sps->pic_width_in_mbs_minus1 + 1) * 16;
- 		height = (sps->pic_height_in_map_units_minus1 + 1) * 16;
- 
 @@ -70,8 +84,27 @@ static int rkvdec_try_ctrl(struct v4l2_ctrl *ctrl)
  	return 0;
  }
@@ -521,6 +525,35 @@ index 88f5f4bb320b..c9a551dbd9bc 100644
  	.start = rkvdec_h264_start,
  	.stop = rkvdec_h264_stop,
  	.run = rkvdec_h264_run,
+diff --git a/drivers/staging/media/rkvdec/rkvdec-h264.c b/drivers/staging/media/rkvdec/rkvdec-h264.c
+index 3cbb1d26b972..bd106b23f4a0 100644
+--- a/drivers/staging/media/rkvdec/rkvdec-h264.c
++++ b/drivers/staging/media/rkvdec/rkvdec-h264.c
+@@ -1047,19 +1047,15 @@ static int rkvdec_h264_validate_sps(struct rkvdec_
+ {
+ 	unsigned int width, height;
+
+-	/*
+-	 * TODO: The hardware supports 10-bit and 4:2:2 profiles,
+-	 * but it's currently broken in the driver.
+-	 * Reject them for now, until it's fixed.
+-	 */
+-	if (sps->chroma_format_idc > 1)
+-		/* Only 4:0:0 and 4:2:0 are supported */
++
++	if (sps->chroma_format_idc > 2)
++		/* Only 4:0:0, 4:2:0 and 4:2:2 are supported */
+ 		return -EINVAL;
+ 	if (sps->bit_depth_luma_minus8 != sps->bit_depth_chroma_minus8)
+ 		/* Luma and chroma bit depth mismatch */
+ 		return -EINVAL;
+-	if (sps->bit_depth_luma_minus8 != 0)
+-		/* Only 8-bit is supported */
++	if (sps->bit_depth_luma_minus8 != 0 && sps->bit_depth_luma_minus8 != 2)
++		/* Only 8-bit and 10-bit is supported */
+ 		return -EINVAL;
+ 
+ 	width = (sps->pic_width_in_mbs_minus1 + 1) * 16;
 diff --git a/drivers/staging/media/rkvdec/rkvdec.c b/drivers/staging/media/rkvdec/rkvdec.c
 index 3cbb1d26b972..bd106b23f4a0 100644
 --- a/drivers/staging/media/rkvdec/rkvdec.c
@@ -534,31 +567,6 @@ index 3cbb1d26b972..bd106b23f4a0 100644
  	pix_mp->plane_fmt[0].sizeimage += 128 *
  		DIV_ROUND_UP(pix_mp->width, 16) *
  		DIV_ROUND_UP(pix_mp->height, 16);
-@@ -55,19 +55,15 @@ static int rkvdec_try_ctrl(struct v4l2_ctrl *ctrl)
- 	if (ctrl->id == V4L2_CID_STATELESS_H264_SPS) {
- 		const struct v4l2_ctrl_h264_sps *sps = ctrl->p_new.p_h264_sps;
- 		unsigned int width, height;
--		/*
--		 * TODO: The hardware supports 10-bit and 4:2:2 profiles,
--		 * but it's currently broken in the driver.
--		 * Reject them for now, until it's fixed.
--		 */
--		if (sps->chroma_format_idc > 1)
--			/* Only 4:0:0 and 4:2:0 are supported */
-+
-+		if (sps->chroma_format_idc > 2)
-+			/* Only 4:0:0, 4:2:0 and 4:2:2 are supported */
- 			return -EINVAL;
- 		if (sps->bit_depth_luma_minus8 != sps->bit_depth_chroma_minus8)
- 			/* Luma and chroma bit depth mismatch */
- 			return -EINVAL;
--		if (sps->bit_depth_luma_minus8 != 0)
--			/* Only 8-bit is supported */
-+		if (sps->bit_depth_luma_minus8 != 0 && sps->bit_depth_luma_minus8 != 2)
-+			/* Only 8-bit and 10-bit is supported */
- 			return -EINVAL;
- 
- 		if (ctx->valid_fmt && ctx->valid_fmt != rkvdec_valid_fmt(ctx, ctrl))
 @@ -155,6 +151,9 @@ static const struct rkvdec_ctrls rkvdec_h264_ctrls = {
  
  static const u32 rkvdec_h264_vp9_decoded_fmts[] = {

@@ -766,20 +766,10 @@ index 8b957af7c61a..303c6e81ca4f 100644
 -			DRM_DEV_ERROR(hdmi->dev, "failed to get phy\n");
 -		return ret;
 +			DRM_DEV_ERROR(hdmi->dev, "Failed to get phy: %d\n", ret);
-+		goto err_disable_clk;
++		goto err_clk;
  	}
  
- 	ret = clk_prepare_enable(hdmi->vpll_clk);
-@@ -524,8 +524,7 @@ static int dw_hdmi_rockchip_bind(struct device *dev, struct device *master,
- 
- 	ret = clk_prepare_enable(hdmi->vpll_clk);
- 	if (ret) {
--		DRM_DEV_ERROR(hdmi->dev, "Failed to enable HDMI vpll: %d\n",
--			      ret);
-+		DRM_DEV_ERROR(hdmi->dev, "Failed to enable vpll: %d\n", ret);
- 		return ret;
- 	}
- 
+ 	ret = clk_prepare_enable(hdmi->ref_clk);
 @@ -530,7 +530,11 @@ static int dw_hdmi_rockchip_bind(struct device *dev, struct device *master,
  	}
  
@@ -788,7 +778,7 @@ index 8b957af7c61a..303c6e81ca4f 100644
 +	ret = drm_simple_encoder_init(drm, encoder, DRM_MODE_ENCODER_TMDS);
 +	if (ret) {
 +		DRM_DEV_ERROR(hdmi->dev, "Failed to init encoder: %d\n", ret);
-+		goto err_disable_clk;
++		goto err_clk;
 +	}
  
  	platform_set_drvdata(pdev, hdmi);
@@ -1291,7 +1281,7 @@ index 9af45fdfbd19..134c2db8d0fe 100644
 @@ -68,6 +68,7 @@ struct rockchip_hdmi {
  	struct device *dev;
  	struct regmap *regmap;
- 	struct drm_encoder encoder;
+ 	struct rockchip_encoder encoder;
 +	struct drm_bridge bridge;
  	const struct rockchip_hdmi_chip_data *chip_data;
  	struct clk *vpll_clk;
@@ -1315,7 +1305,7 @@ index 9af45fdfbd19..134c2db8d0fe 100644
 -				    struct drm_display_mode *adj_mode)
 -{
 -	return true;
-+	clk_set_rate(hdmi->vpll_clk, adjusted_mode->clock * 1000);
++	clk_set_rate(hdmi->ref_clk, adjusted_mode->clock * 1000);
  }
  
 -static void dw_hdmi_rockchip_encoder_mode_set(struct drm_encoder *encoder,
@@ -1325,7 +1315,7 @@ index 9af45fdfbd19..134c2db8d0fe 100644
  {
 -	struct rockchip_hdmi *hdmi = to_rockchip_hdmi(encoder);
 -
--	clk_set_rate(hdmi->vpll_clk, adj_mode->clock * 1000);
+-	clk_set_rate(hdmi->ref_clk, adj_mode->clock * 1000);
 -}
 -
 -static void dw_hdmi_rockchip_encoder_enable(struct drm_encoder *encoder)
@@ -1415,14 +1405,14 @@ index 9af45fdfbd19..134c2db8d0fe 100644
  	struct rockchip_hdmi *hdmi;
  	int ret;
 @@ -618,19 +647,21 @@ static int dw_hdmi_rockchip_bind(struct device *dev, struct device *master,
- 		goto err_disable_clk;
+ 		goto err_clk;
  	}
  
 -	drm_encoder_helper_add(encoder, &dw_hdmi_rockchip_encoder_helper_funcs);
  	ret = drm_simple_encoder_init(drm, encoder, DRM_MODE_ENCODER_TMDS);
  	if (ret) {
  		DRM_DEV_ERROR(hdmi->dev, "Failed to init encoder: %d\n", ret);
- 		goto err_disable_clk;
+ 		goto err_clk;
  	}
  
 +	hdmi->bridge.funcs = &dw_hdmi_rockchip_bridge_funcs;
@@ -1440,7 +1430,7 @@ index 9af45fdfbd19..134c2db8d0fe 100644
  	 */
  	if (IS_ERR(hdmi->hdmi)) {
 @@ -640,8 +671,23 @@ static int dw_hdmi_rockchip_bind(struct device *dev, struct device *master,
- 		goto err_encoder_cleanup;
+ 		goto err_bind;
  	}
  
 +	next_bridge = of_drm_find_bridge(pdev->dev.of_node);
@@ -1460,18 +1450,18 @@ index 9af45fdfbd19..134c2db8d0fe 100644
  
 +err_dw_hdmi_remove:
 +	dw_hdmi_remove(hdmi->hdmi);
- err_encoder_cleanup:
+ err_bind:
  	drm_encoder_cleanup(encoder);
- err_disable_clk:
+ 	clk_disable_unprepare(hdmi->ref_clk);
 @@ -655,7 +701,7 @@ static void dw_hdmi_rockchip_unbind(struct device *dev, struct device *master,
  {
  	struct rockchip_hdmi *hdmi = dev_get_drvdata(dev);
  
 -	dw_hdmi_unbind(hdmi->hdmi);
 +	dw_hdmi_remove(hdmi->hdmi);
- 	clk_disable_unprepare(hdmi->vpll_clk);
- }
+ 	clk_disable_unprepare(hdmi->ref_clk);
  
+ 	regulator_disable(hdmi->avdd_1v8);
 
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jonas Karlman <jonas@kwiboo.se>
@@ -2227,10 +2217,11 @@ diff --git a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c b/drivers/gpu/drm/rockc
 index 134c2db8d0fe..cba63dd5e8c8 100644
 --- a/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
 +++ b/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
-@@ -77,6 +77,7 @@ struct rockchip_hdmi {
- };
+@@ -77,6 +77,8 @@ struct rockchip_hdmi {
  
- #define to_rockchip_hdmi(x)	container_of(x, struct rockchip_hdmi, x)
+ 	return container_of(rkencoder, struct rockchip_hdmi, encoder);
+ }
++
 +#define to_crtc_state(x)	container_of(x, struct drm_crtc_state, x)
  
  static const struct dw_hdmi_mpll_config rockchip_mpll_cfg[] = {
@@ -2321,15 +2312,14 @@ diff --git a/drivers/gpu/drm/rockchip/rockchip_drm_drv.h b/drivers/gpu/drm/rockc
 index aa0909e8edf9..59716b037205 100644
 --- a/drivers/gpu/drm/rockchip/rockchip_drm_drv.h
 +++ b/drivers/gpu/drm/rockchip/rockchip_drm_drv.h
-@@ -31,6 +31,8 @@ struct rockchip_crtc_state {
- 	int output_bpc;
- 	int output_flags;
+@@ -31,6 +31,7 @@ struct rockchip_crtc_state {
  	bool enable_afbc;
-+	u32 bus_format;
+ 	u32 bus_format;
+ 	u32 bus_flags;
 +	int bus_width;
+ 	int color_space;
  };
  #define to_rockchip_crtc_state(s) \
- 		container_of(s, struct rockchip_crtc_state, base)
 
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jonas Karlman <jonas@kwiboo.se>

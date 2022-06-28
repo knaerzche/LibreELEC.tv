@@ -2931,7 +2931,24 @@ diff --git a/drivers/staging/media/rkvdec/rkvdec.c b/drivers/staging/media/rkvde
 index 722d9912b332..62e728777cd4 100644
 --- a/drivers/staging/media/rkvdec/rkvdec.c
 +++ b/drivers/staging/media/rkvdec/rkvdec.c
-@@ -79,6 +79,26 @@ static int rkvdec_try_ctrl(struct v4l2_ctrl *ctrl)
+@@ -87,7 +107,7 @@ static int rkvdec_s_ctrl(struct v4l2_ctrl *ctrl)
+ {
+ 	struct rkvdec_ctx *ctx = container_of(ctrl->handler, struct rkvdec_ctx, ctrl_hdl);
+ 
+-	if (ctrl->id == V4L2_CID_STATELESS_H264_SPS && !ctx->valid_fmt) {
++	if (!ctx->valid_fmt) {
+ 		ctx->valid_fmt = rkvdec_valid_fmt(ctx, ctrl);
+ 		if (ctx->valid_fmt) {
+ 			struct v4l2_pix_format_mplane *pix_mp;
+@@ -156,6 +176,7 @@ static const struct rkvdec_ctrl_desc rkvdec_hevc_ctrl_descs[] = {
+ 	},
+ 	{
+ 		.cfg.id = V4L2_CID_MPEG_VIDEO_HEVC_SPS,
++		.cfg.ops = &rkvdec_ctrl_ops,
+ 	},
+ 	{
+ 		.cfg.id = V4L2_CID_MPEG_VIDEO_HEVC_PPS,
+@@ -555,6 +555,26 @@ static int rkvdec_try_ctrl(struct v4l2_ctrl *ctrl)
  		if (width > ctx->coded_fmt.fmt.pix_mp.width ||
  		    height > ctx->coded_fmt.fmt.pix_mp.height)
  			return -EINVAL;
@@ -2958,23 +2975,6 @@ index 722d9912b332..62e728777cd4 100644
  	}
  	return 0;
  }
-@@ -87,7 +107,7 @@ static int rkvdec_s_ctrl(struct v4l2_ctrl *ctrl)
- {
- 	struct rkvdec_ctx *ctx = container_of(ctrl->handler, struct rkvdec_ctx, ctrl_hdl);
- 
--	if (ctrl->id == V4L2_CID_STATELESS_H264_SPS && !ctx->valid_fmt) {
-+	if (!ctx->valid_fmt) {
- 		ctx->valid_fmt = rkvdec_valid_fmt(ctx, ctrl);
- 		if (ctx->valid_fmt) {
- 			struct v4l2_pix_format_mplane *pix_mp;
-@@ -156,6 +176,7 @@ static const struct rkvdec_ctrl_desc rkvdec_hevc_ctrl_descs[] = {
- 	},
- 	{
- 		.cfg.id = V4L2_CID_MPEG_VIDEO_HEVC_SPS,
-+		.cfg.ops = &rkvdec_ctrl_ops,
- 	},
- 	{
- 		.cfg.id = V4L2_CID_MPEG_VIDEO_HEVC_PPS,
 
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Alex Bee <knaerzche@gmail.com>
@@ -3136,7 +3136,7 @@ index 62e728777cd4..a5552ccc9460 100644
  #include <linux/platform_device.h>
  #include <linux/pm.h>
  #include <linux/pm_runtime.h>
-@@ -260,21 +261,6 @@ static const struct rkvdec_ctrls rkvdec_vp9_ctrls = {
+@@ -260,22 +261,6 @@ static const struct rkvdec_ctrls rkvdec_vp9_ctrls = {
  };
  
  static const struct rkvdec_coded_fmt_desc rkvdec_coded_fmts[] = {
@@ -3154,11 +3154,12 @@ index 62e728777cd4..a5552ccc9460 100644
 -		.ops = &rkvdec_h264_fmt_ops,
 -		.num_decoded_fmts = ARRAY_SIZE(rkvdec_h264_decoded_fmts),
 -		.decoded_fmts = rkvdec_h264_decoded_fmts,
+-		.subsystem_flags = VB2_V4L2_FL_SUPPORTS_M2M_HOLD_CAPTURE_BUF,
 -	},
  	{
  		.fourcc = V4L2_PIX_FMT_HEVC_SLICE,
  		.frmsize = {
-@@ -289,6 +275,23 @@ static const struct rkvdec_coded_fmt_desc rkvdec_coded_fmts[] = {
+@@ -289,6 +275,24 @@ static const struct rkvdec_coded_fmt_desc rkvdec_coded_fmts[] = {
  		.ops = &rkvdec_hevc_fmt_ops,
  		.num_decoded_fmts = ARRAY_SIZE(rkvdec_hevc_decoded_fmts),
  		.decoded_fmts = rkvdec_hevc_decoded_fmts,
@@ -3178,6 +3179,7 @@ index 62e728777cd4..a5552ccc9460 100644
 +		.ops = &rkvdec_h264_fmt_ops,
 +		.num_decoded_fmts = ARRAY_SIZE(rkvdec_h264_decoded_fmts),
 +		.decoded_fmts = rkvdec_h264_decoded_fmts,
++		.subsystem_flags = VB2_V4L2_FL_SUPPORTS_M2M_HOLD_CAPTURE_BUF,
 +		.capability = RKVDEC_CAPABILITY_H264,
  	},
  	{
@@ -3367,9 +3369,9 @@ index 53719e825c70..d2096ec351e1 100644
  	int (*adjust_fmt)(struct rkvdec_ctx *ctx,
  			  struct v4l2_format *f);
 @@ -89,6 +97,7 @@ struct rkvdec_coded_fmt_desc {
- 	const struct rkvdec_coded_fmt_ops *ops;
  	unsigned int num_decoded_fmts;
  	const u32 *decoded_fmts;
+ 	u32 subsystem_flags;
 +	unsigned int capability;
  };
  
