@@ -168,10 +168,10 @@ index 287488016ff2..01f8a50586eb 100644
  		{ .format = V4L2_PIX_FMT_YVU410,  .pixel_enc = V4L2_PIXEL_ENC_YUV, .mem_planes = 1, .comp_planes = 3, .bpp = { 1, 1, 1, 0 }, .hdiv = 4, .vdiv = 4 },
  		{ .format = V4L2_PIX_FMT_YUV411P, .pixel_enc = V4L2_PIXEL_ENC_YUV, .mem_planes = 1, .comp_planes = 3, .bpp = { 1, 1, 1, 0 }, .hdiv = 4, .vdiv = 1 },
 diff --git a/drivers/media/v4l2-core/v4l2-ioctl.c b/drivers/media/v4l2-core/v4l2-ioctl.c
-index 51289d4741dc..e6f2c65e24ca 100644
+index 21470de62d72..cb7496c084f6 100644
 --- a/drivers/media/v4l2-core/v4l2-ioctl.c
 +++ b/drivers/media/v4l2-core/v4l2-ioctl.c
-@@ -1299,6 +1299,8 @@ static void v4l_fill_fmtdesc(struct v4l2_fmtdesc *fmt)
+@@ -1306,6 +1306,8 @@ static void v4l_fill_fmtdesc(struct v4l2_fmtdesc *fmt)
  	case V4L2_PIX_FMT_NV61:		descr = "Y/CrCb 4:2:2"; break;
  	case V4L2_PIX_FMT_NV24:		descr = "Y/CbCr 4:4:4"; break;
  	case V4L2_PIX_FMT_NV42:		descr = "Y/CrCb 4:4:4"; break;
@@ -181,10 +181,10 @@ index 51289d4741dc..e6f2c65e24ca 100644
  	case V4L2_PIX_FMT_NV12_16L16:	descr = "Y/CbCr 4:2:0 (16x16 Linear)"; break;
  	case V4L2_PIX_FMT_NV12_32L32:   descr = "Y/CbCr 4:2:0 (32x32 Linear)"; break;
 diff --git a/include/uapi/linux/videodev2.h b/include/uapi/linux/videodev2.h
-index df8b9c486ba1..9845ce720b4e 100644
+index 343b95107fce..3a5d6290a379 100644
 --- a/include/uapi/linux/videodev2.h
 +++ b/include/uapi/linux/videodev2.h
-@@ -602,6 +602,9 @@ struct v4l2_pix_format {
+@@ -603,6 +603,9 @@ struct v4l2_pix_format {
  #define V4L2_PIX_FMT_NV24    v4l2_fourcc('N', 'V', '2', '4') /* 24  Y/CbCr 4:4:4  */
  #define V4L2_PIX_FMT_NV42    v4l2_fourcc('N', 'V', '4', '2') /* 24  Y/CrCb 4:4:4  */
  
@@ -212,10 +212,10 @@ Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
  1 file changed, 5 insertions(+), 5 deletions(-)
 
 diff --git a/drivers/staging/media/rkvdec/rkvdec-h264.c b/drivers/staging/media/rkvdec/rkvdec-h264.c
-index 503ae683d0fd..88f5f4bb320b 100644
+index 2992fb87cf72..54fc3a6d0902 100644
 --- a/drivers/staging/media/rkvdec/rkvdec-h264.c
 +++ b/drivers/staging/media/rkvdec/rkvdec-h264.c
-@@ -893,9 +893,9 @@ static void config_registers(struct rkvdec_ctx *ctx,
+@@ -915,9 +915,9 @@ static void config_registers(struct rkvdec_ctx *ctx,
  	dma_addr_t rlc_addr;
  	dma_addr_t refer_addr;
  	u32 rlc_len;
@@ -228,7 +228,7 @@ index 503ae683d0fd..88f5f4bb320b 100644
  	u32 yuv_virstride = 0;
  	u32 offset;
  	dma_addr_t dst_addr;
-@@ -906,8 +906,8 @@ static void config_registers(struct rkvdec_ctx *ctx,
+@@ -928,8 +928,8 @@ static void config_registers(struct rkvdec_ctx *ctx,
  
  	f = &ctx->decoded_fmt;
  	dst_fmt = &f->fmt.pix_mp;
@@ -257,7 +257,7 @@ Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
  1 file changed, 15 insertions(+), 14 deletions(-)
 
 diff --git a/drivers/staging/media/rkvdec/rkvdec.c b/drivers/staging/media/rkvdec/rkvdec.c
-index c88e817cac0a..d4ae792874bb 100644
+index 7bab7586918c..40cc791aef26 100644
 --- a/drivers/staging/media/rkvdec/rkvdec.c
 +++ b/drivers/staging/media/rkvdec/rkvdec.c
 @@ -27,6 +27,17 @@
@@ -278,7 +278,7 @@ index c88e817cac0a..d4ae792874bb 100644
  static int rkvdec_try_ctrl(struct v4l2_ctrl *ctrl)
  {
  	struct rkvdec_ctx *ctx = container_of(ctrl->handler, struct rkvdec_ctx, ctrl_hdl);
-@@ -212,13 +223,9 @@ static void rkvdec_reset_decoded_fmt(struct rkvdec_ctx *ctx)
+@@ -192,13 +203,9 @@ static void rkvdec_reset_decoded_fmt(struct rkvdec_ctx *ctx)
  
  	rkvdec_reset_fmt(ctx, f, ctx->coded_fmt_desc->decoded_fmts[0]);
  	f->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
@@ -295,7 +295,7 @@ index c88e817cac0a..d4ae792874bb 100644
  }
  
  static int rkvdec_enum_framesizes(struct file *file, void *priv,
-@@ -284,13 +291,7 @@ static int rkvdec_try_capture_fmt(struct file *file, void *priv,
+@@ -264,13 +271,7 @@ static int rkvdec_try_capture_fmt(struct file *file, void *priv,
  				       &pix_mp->height,
  				       &coded_desc->frmsize);
  
@@ -324,15 +324,15 @@ and 4:2:2 content.
 
 Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
 ---
- drivers/staging/media/rkvdec/rkvdec.c | 59 ++++++++++++++++++++++++---
+ drivers/staging/media/rkvdec/rkvdec.c | 67 +++++++++++++++++++++++----
  drivers/staging/media/rkvdec/rkvdec.h |  2 +
- 2 files changed, 55 insertions(+), 6 deletions(-)
+ 2 files changed, 61 insertions(+), 8 deletions(-)
 
 diff --git a/drivers/staging/media/rkvdec/rkvdec.c b/drivers/staging/media/rkvdec/rkvdec.c
-index d4ae792874bb..3cbb1d26b972 100644
+index 40cc791aef26..e93e1cb0f829 100644
 --- a/drivers/staging/media/rkvdec/rkvdec.c
 +++ b/drivers/staging/media/rkvdec/rkvdec.c
-@@ -38,6 +38,16 @@ static void rkvdec_fill_decoded_pixfmt(struct rkvdec_ctx *ctx,
+@@ -38,19 +38,56 @@ static void rkvdec_fill_decoded_pixfmt(struct rkvdec_ctx *ctx,
  	pix_mp->field = V4L2_FIELD_NONE;
  }
  
@@ -349,10 +349,24 @@ index d4ae792874bb..3cbb1d26b972 100644
  static int rkvdec_try_ctrl(struct v4l2_ctrl *ctrl)
  {
  	struct rkvdec_ctx *ctx = container_of(ctrl->handler, struct rkvdec_ctx, ctrl_hdl);
-@@ -70,8 +84,27 @@ static int rkvdec_try_ctrl(struct v4l2_ctrl *ctrl)
- 	return 0;
- }
+ 	const struct rkvdec_coded_fmt_desc *desc = ctx->coded_fmt_desc;
  
+-	if (desc->ops->try_ctrl)
+-		return desc->ops->try_ctrl(ctx, ctrl);
++	if (desc->ops->try_ctrl) {
++		int ret;
++		ret = desc->ops->try_ctrl(ctx, ctrl);
++		if (ret)
++			return ret;
++	}
++
++	if (ctx->valid_fmt && ctx->valid_fmt != rkvdec_valid_fmt(ctx, ctrl))
++		/* Only current valid format */
++		return -EINVAL;
++
++	return 0;
++}
++
 +static int rkvdec_s_ctrl(struct v4l2_ctrl *ctrl)
 +{
 +	struct rkvdec_ctx *ctx = container_of(ctrl->handler, struct rkvdec_ctx, ctrl_hdl);
@@ -367,17 +381,17 @@ index d4ae792874bb..3cbb1d26b972 100644
 +			rkvdec_fill_decoded_pixfmt(ctx, pix_mp);
 +		}
 +	}
-+
-+	return 0;
-+}
-+
+ 
+ 	return 0;
+ }
+ 
  static const struct v4l2_ctrl_ops rkvdec_ctrl_ops = {
  	.try_ctrl = rkvdec_try_ctrl,
 +	.s_ctrl = rkvdec_s_ctrl,
  };
  
  static const struct rkvdec_ctrl_desc rkvdec_h264_ctrl_descs[] = {
-@@ -221,6 +254,7 @@ static void rkvdec_reset_decoded_fmt(struct rkvdec_ctx *ctx)
+@@ -201,6 +238,7 @@ static void rkvdec_reset_decoded_fmt(struct rkvdec_ctx *ctx)
  {
  	struct v4l2_format *f = &ctx->decoded_fmt;
  
@@ -385,7 +399,7 @@ index d4ae792874bb..3cbb1d26b972 100644
  	rkvdec_reset_fmt(ctx, f, ctx->coded_fmt_desc->decoded_fmts[0]);
  	f->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
  	f->fmt.pix_mp.width = ctx->coded_fmt.fmt.pix_mp.width;
-@@ -276,13 +310,17 @@ static int rkvdec_try_capture_fmt(struct file *file, void *priv,
+@@ -256,13 +294,17 @@ static int rkvdec_try_capture_fmt(struct file *file, void *priv,
  	if (WARN_ON(!coded_desc))
  		return -EINVAL;
  
@@ -409,7 +423,7 @@ index d4ae792874bb..3cbb1d26b972 100644
  
  	/* Always apply the frmsize constraint of the coded end. */
  	pix_mp->width = max(pix_mp->width, ctx->coded_fmt.fmt.pix_mp.width);
-@@ -346,6 +384,7 @@ static int rkvdec_s_capture_fmt(struct file *file, void *priv,
+@@ -326,6 +368,7 @@ static int rkvdec_s_capture_fmt(struct file *file, void *priv,
  		return ret;
  
  	ctx->decoded_fmt = *f;
@@ -417,7 +431,7 @@ index d4ae792874bb..3cbb1d26b972 100644
  	return 0;
  }
  
-@@ -446,6 +485,14 @@ static int rkvdec_enum_capture_fmt(struct file *file, void *priv,
+@@ -429,6 +472,14 @@ static int rkvdec_enum_capture_fmt(struct file *file, void *priv,
  	if (WARN_ON(!ctx->coded_fmt_desc))
  		return -EINVAL;
  
@@ -433,7 +447,7 @@ index d4ae792874bb..3cbb1d26b972 100644
  		return -EINVAL;
  
 diff --git a/drivers/staging/media/rkvdec/rkvdec.h b/drivers/staging/media/rkvdec/rkvdec.h
-index 2f4ea1786b93..c26c472baa6f 100644
+index 633335ebb9c4..b9e219438bc9 100644
 --- a/drivers/staging/media/rkvdec/rkvdec.h
 +++ b/drivers/staging/media/rkvdec/rkvdec.h
 @@ -66,6 +66,7 @@ vb2_to_rkvdec_decoded_buf(struct vb2_buffer *buf)
@@ -444,7 +458,7 @@ index 2f4ea1786b93..c26c472baa6f 100644
  	int (*start)(struct rkvdec_ctx *ctx);
  	void (*stop)(struct rkvdec_ctx *ctx);
  	int (*run)(struct rkvdec_ctx *ctx);
-@@ -99,6 +100,7 @@ struct rkvdec_ctx {
+@@ -101,6 +102,7 @@ struct rkvdec_ctx {
  	struct v4l2_fh fh;
  	struct v4l2_format coded_fmt;
  	struct v4l2_format decoded_fmt;
@@ -468,15 +482,39 @@ for the provided SPS control.
 
 Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
 ---
- drivers/staging/media/rkvdec/rkvdec-h264.c | 20 ++++++++++++++++++++
- drivers/staging/media/rkvdec/rkvdec.c      | 19 +++++++++----------
- 2 files changed, 29 insertions(+), 10 deletions(-)
+ drivers/staging/media/rkvdec/rkvdec-h264.c | 33 ++++++++++++++++------
+ drivers/staging/media/rkvdec/rkvdec.c      | 19 +++++++++----
+ 2 files changed, 37 insertions(+), 15 deletions(-)
 
 diff --git a/drivers/staging/media/rkvdec/rkvdec-h264.c b/drivers/staging/media/rkvdec/rkvdec-h264.c
-index 88f5f4bb320b..c9a551dbd9bc 100644
+index 54fc3a6d0902..af530b05a789 100644
 --- a/drivers/staging/media/rkvdec/rkvdec-h264.c
 +++ b/drivers/staging/media/rkvdec/rkvdec-h264.c
-@@ -1021,6 +1021,25 @@ static int rkvdec_h264_adjust_fmt(struct rkvdec_ctx *ctx,
+@@ -1044,19 +1044,14 @@ static int rkvdec_h264_validate_sps(struct rkvdec_ctx *ctx,
+ {
+ 	unsigned int width, height;
+ 
+-	/*
+-	 * TODO: The hardware supports 10-bit and 4:2:2 profiles,
+-	 * but it's currently broken in the driver.
+-	 * Reject them for now, until it's fixed.
+-	 */
+-	if (sps->chroma_format_idc > 1)
+-		/* Only 4:0:0 and 4:2:0 are supported */
++	if (sps->chroma_format_idc > 2)
++		/* Only 4:0:0, 4:2:0 and 4:2:2 are supported */
+ 		return -EINVAL;
+ 	if (sps->bit_depth_luma_minus8 != sps->bit_depth_chroma_minus8)
+ 		/* Luma and chroma bit depth mismatch */
+ 		return -EINVAL;
+-	if (sps->bit_depth_luma_minus8 != 0)
+-		/* Only 8-bit is supported */
++	if (sps->bit_depth_luma_minus8 != 0 && sps->bit_depth_luma_minus8 != 2)
++		/* Only 8-bit and 10-bit is supported */
+ 		return -EINVAL;
+ 
+ 	width = (sps->pic_width_in_mbs_minus1 + 1) * 16;
+@@ -1077,6 +1072,25 @@ static int rkvdec_h264_validate_sps(struct rkvdec_ctx *ctx,
  	return 0;
  }
  
@@ -502,7 +540,7 @@ index 88f5f4bb320b..c9a551dbd9bc 100644
  static int rkvdec_h264_start(struct rkvdec_ctx *ctx)
  {
  	struct rkvdec_dev *rkvdec = ctx->dev;
-@@ -1124,6 +1143,7 @@ static int rkvdec_h264_run(struct rkvdec_ctx *ctx)
+@@ -1198,6 +1212,7 @@ static int rkvdec_h264_try_ctrl(struct rkvdec_ctx *ctx, struct v4l2_ctrl *ctrl)
  
  const struct rkvdec_coded_fmt_ops rkvdec_h264_fmt_ops = {
  	.adjust_fmt = rkvdec_h264_adjust_fmt,
@@ -510,37 +548,8 @@ index 88f5f4bb320b..c9a551dbd9bc 100644
  	.start = rkvdec_h264_start,
  	.stop = rkvdec_h264_stop,
  	.run = rkvdec_h264_run,
-diff --git a/drivers/staging/media/rkvdec/rkvdec-h264.c b/drivers/staging/media/rkvdec/rkvdec-h264.c
-index 3cbb1d26b972..bd106b23f4a0 100644
---- a/drivers/staging/media/rkvdec/rkvdec-h264.c
-+++ b/drivers/staging/media/rkvdec/rkvdec-h264.c
-@@ -1047,19 +1047,15 @@ static int rkvdec_h264_validate_sps(struct rkvdec_
- {
- 	unsigned int width, height;
-
--	/*
--	 * TODO: The hardware supports 10-bit and 4:2:2 profiles,
--	 * but it's currently broken in the driver.
--	 * Reject them for now, until it's fixed.
--	 */
--	if (sps->chroma_format_idc > 1)
--		/* Only 4:0:0 and 4:2:0 are supported */
-+
-+	if (sps->chroma_format_idc > 2)
-+		/* Only 4:0:0, 4:2:0 and 4:2:2 are supported */
- 		return -EINVAL;
- 	if (sps->bit_depth_luma_minus8 != sps->bit_depth_chroma_minus8)
- 		/* Luma and chroma bit depth mismatch */
- 		return -EINVAL;
--	if (sps->bit_depth_luma_minus8 != 0)
--		/* Only 8-bit is supported */
-+	if (sps->bit_depth_luma_minus8 != 0 && sps->bit_depth_luma_minus8 != 2)
-+		/* Only 8-bit and 10-bit is supported */
- 		return -EINVAL;
- 
- 	width = (sps->pic_width_in_mbs_minus1 + 1) * 16;
 diff --git a/drivers/staging/media/rkvdec/rkvdec.c b/drivers/staging/media/rkvdec/rkvdec.c
-index 3cbb1d26b972..bd106b23f4a0 100644
+index e93e1cb0f829..4f5436c89e08 100644
 --- a/drivers/staging/media/rkvdec/rkvdec.c
 +++ b/drivers/staging/media/rkvdec/rkvdec.c
 @@ -31,7 +31,7 @@ static void rkvdec_fill_decoded_pixfmt(struct rkvdec_ctx *ctx,
@@ -552,9 +561,12 @@ index 3cbb1d26b972..bd106b23f4a0 100644
  	pix_mp->plane_fmt[0].sizeimage += 128 *
  		DIV_ROUND_UP(pix_mp->width, 16) *
  		DIV_ROUND_UP(pix_mp->height, 16);
-@@ -155,6 +151,9 @@ static const struct rkvdec_ctrls rkvdec_h264_ctrls = {
+@@ -136,8 +136,11 @@ static const struct rkvdec_ctrls rkvdec_h264_ctrls = {
+ 	.num_ctrls = ARRAY_SIZE(rkvdec_h264_ctrl_descs),
+ };
  
- static const u32 rkvdec_h264_vp9_decoded_fmts[] = {
+-static const u32 rkvdec_h264_vp9_decoded_fmts[] = {
++static const u32 rkvdec_h264_decoded_fmts[] = {
  	V4L2_PIX_FMT_NV12,
 +	V4L2_PIX_FMT_NV15,
 +	V4L2_PIX_FMT_NV16,
@@ -562,3 +574,86 @@ index 3cbb1d26b972..bd106b23f4a0 100644
  };
  
  static const struct rkvdec_ctrl_desc rkvdec_vp9_ctrl_descs[] = {
+@@ -160,6 +163,10 @@ static const struct rkvdec_ctrls rkvdec_vp9_ctrls = {
+ 	.num_ctrls = ARRAY_SIZE(rkvdec_vp9_ctrl_descs),
+ };
+ 
++static const u32 rkvdec_vp9_decoded_fmts[] = {
++	V4L2_PIX_FMT_NV12,
++};
++
+ static const struct rkvdec_coded_fmt_desc rkvdec_coded_fmts[] = {
+ 	{
+ 		.fourcc = V4L2_PIX_FMT_H264_SLICE,
+@@ -173,8 +180,8 @@ static const struct rkvdec_coded_fmt_desc rkvdec_coded_fmts[] = {
+ 		},
+ 		.ctrls = &rkvdec_h264_ctrls,
+ 		.ops = &rkvdec_h264_fmt_ops,
+-		.num_decoded_fmts = ARRAY_SIZE(rkvdec_h264_vp9_decoded_fmts),
+-		.decoded_fmts = rkvdec_h264_vp9_decoded_fmts,
++		.num_decoded_fmts = ARRAY_SIZE(rkvdec_h264_decoded_fmts),
++		.decoded_fmts = rkvdec_h264_decoded_fmts,
+ 		.subsystem_flags = VB2_V4L2_FL_SUPPORTS_M2M_HOLD_CAPTURE_BUF,
+ 	},
+ 	{
+@@ -189,8 +196,8 @@ static const struct rkvdec_coded_fmt_desc rkvdec_coded_fmts[] = {
+ 		},
+ 		.ctrls = &rkvdec_vp9_ctrls,
+ 		.ops = &rkvdec_vp9_fmt_ops,
+-		.num_decoded_fmts = ARRAY_SIZE(rkvdec_h264_vp9_decoded_fmts),
+-		.decoded_fmts = rkvdec_h264_vp9_decoded_fmts,
++		.num_decoded_fmts = ARRAY_SIZE(rkvdec_vp9_decoded_fmts),
++		.decoded_fmts = rkvdec_vp9_decoded_fmts,
+ 	}
+ };
+ 
+
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Alex Bee <knaerzche@gmail.com>
+Date: Sun, 27 Mar 2022 14:18:07 +0200
+Subject: [PATCH] media: rkvdec-h264: Don't hardcode SPS/PPS parameters
+
+Some SPS/PPS parameters are currently hardcoded in the driver
+even though so do exist in the uapi which is stable by now.
+
+Use them instead of hardcoding them.
+
+Signed-off-by: Alex Bee <knaerzche@gmail.com>
+---
+ drivers/staging/media/rkvdec/rkvdec-h264.c | 13 +++++++------
+ 1 file changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/staging/media/rkvdec/rkvdec-h264.c b/drivers/staging/media/rkvdec/rkvdec-h264.c
+index af530b05a789..f31b7c021d82 100644
+--- a/drivers/staging/media/rkvdec/rkvdec-h264.c
++++ b/drivers/staging/media/rkvdec/rkvdec-h264.c
+@@ -655,13 +655,14 @@ static void assemble_hw_pps(struct rkvdec_ctx *ctx,
+ 
+ #define WRITE_PPS(value, field) set_ps_field(hw_ps->info, field, value)
+ 	/* write sps */
+-	WRITE_PPS(0xf, SEQ_PARAMETER_SET_ID);
+-	WRITE_PPS(0xff, PROFILE_IDC);
+-	WRITE_PPS(1, CONSTRAINT_SET3_FLAG);
++	WRITE_PPS(sps->seq_parameter_set_id, SEQ_PARAMETER_SET_ID);
++	WRITE_PPS(sps->profile_idc, PROFILE_IDC);
++	WRITE_PPS((sps->constraint_set_flags & 1 << 3) ? 1 : 0, CONSTRAINT_SET3_FLAG);
+ 	WRITE_PPS(sps->chroma_format_idc, CHROMA_FORMAT_IDC);
+ 	WRITE_PPS(sps->bit_depth_luma_minus8, BIT_DEPTH_LUMA);
+ 	WRITE_PPS(sps->bit_depth_chroma_minus8, BIT_DEPTH_CHROMA);
+-	WRITE_PPS(0, QPPRIME_Y_ZERO_TRANSFORM_BYPASS_FLAG);
++	WRITE_PPS(!!(sps->flags & V4L2_H264_SPS_FLAG_QPPRIME_Y_ZERO_TRANSFORM_BYPASS),
++		  QPPRIME_Y_ZERO_TRANSFORM_BYPASS_FLAG);
+ 	WRITE_PPS(sps->log2_max_frame_num_minus4, LOG2_MAX_FRAME_NUM_MINUS4);
+ 	WRITE_PPS(sps->max_num_ref_frames, MAX_NUM_REF_FRAMES);
+ 	WRITE_PPS(sps->pic_order_cnt_type, PIC_ORDER_CNT_TYPE);
+@@ -688,8 +689,8 @@ static void assemble_hw_pps(struct rkvdec_ctx *ctx,
+ 		  DIRECT_8X8_INFERENCE_FLAG);
+ 
+ 	/* write pps */
+-	WRITE_PPS(0xff, PIC_PARAMETER_SET_ID);
+-	WRITE_PPS(0x1f, PPS_SEQ_PARAMETER_SET_ID);
++	WRITE_PPS(pps->pic_parameter_set_id, PIC_PARAMETER_SET_ID);
++	WRITE_PPS(pps->seq_parameter_set_id, PPS_SEQ_PARAMETER_SET_ID);
+ 	WRITE_PPS(!!(pps->flags & V4L2_H264_PPS_FLAG_ENTROPY_CODING_MODE),
+ 		  ENTROPY_CODING_MODE_FLAG);
+ 	WRITE_PPS(!!(pps->flags & V4L2_H264_PPS_FLAG_BOTTOM_FIELD_PIC_ORDER_IN_FRAME_PRESENT),
