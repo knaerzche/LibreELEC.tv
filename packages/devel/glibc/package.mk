@@ -4,10 +4,13 @@
 
 PKG_NAME="glibc"
 PKG_VERSION="2.35"
+PKG_VERSION="2a5b4f7a715921a232f67f6810268c6cd6aa0af2"
 PKG_SHA256="5123732f6b67ccd319305efd399971d58592122bcc2a6518a1bd2510dd0cf52e"
+PKG_SHA256=""
 PKG_LICENSE="GPL"
 PKG_SITE="https://www.gnu.org/software/libc/"
 PKG_URL="https://ftp.gnu.org/pub/gnu/glibc/${PKG_NAME}-${PKG_VERSION}.tar.xz"
+PKG_URL="https://git.linaro.org/toolchain/glibc.git/snapshot/${PKG_VERSION}.tar.gz"
 PKG_DEPENDS_TARGET="ccache:host autotools:host linux:host gcc:bootstrap pigz:host Python3:host"
 PKG_DEPENDS_INIT="glibc"
 PKG_LONGDESC="The Glibc package contains the main C library."
@@ -27,7 +30,7 @@ PKG_CONFIGURE_OPTS_TARGET="BASH_SHELL=/bin/sh \
                            --with-__thread \
                            --with-binutils=${BUILD}/toolchain/bin \
                            --with-headers=${SYSROOT_PREFIX}/usr/include \
-                           --enable-kernel=5.10.0 \
+                           --enable-kernel=5.15.0 \
                            --without-cvs \
                            --without-gd \
                            --disable-build-nscd \
