@@ -1,0 +1,30 @@
+--- a/meson.build	2022-07-12 12:20:25.366313151 +0000
++++ b/meson.build	2022-07-12 12:46:19.276121413 +0000
+@@ -479,7 +479,6 @@
+ #include <uchar.h>
+ #include <sys/mount.h>
+ #include <sys/stat.h>
+-#include <linux/fs.h>
+ '''
+ 
+ foreach decl : ['char16_t',
+--- a/src/shared/mount-util.c	2022-06-02 18:07:11.000000000 +0000
++++ b/src/shared/mount-util.c	2022-07-12 12:52:46.644787385 +0000
+@@ -7,7 +7,6 @@
+ #include <sys/statvfs.h>
+ #include <unistd.h>
+ #include <linux/loop.h>
+-#include <linux/fs.h>
+ 
+ #include "alloc-util.h"
+ #include "chase-symlinks.h"
+--- a/src/core/namespace.c	2022-06-02 18:07:11.000000000 +0000
++++ b/src/core/namespace.c	2022-07-12 12:56:35.807502035 +0000
+@@ -6,7 +6,6 @@
+ #include <stdio.h>
+ #include <sys/mount.h>
+ #include <unistd.h>
+-#include <linux/fs.h>
+ 
+ #include "alloc-util.h"
+ #include "base-filesystem.h"
