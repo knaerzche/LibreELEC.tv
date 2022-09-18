@@ -19,7 +19,7 @@ index be78382444..35ec87e310 100644
  #include "hevc-ctrls.h"
  
 -#define MAX_SLICES 16
-+#define MAX_SLICES 32
++#define MAX_SLICES 600
  
  typedef struct V4L2RequestControlsHEVC {
      struct v4l2_ctrl_hevc_sps sps;
