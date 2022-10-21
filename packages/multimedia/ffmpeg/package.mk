@@ -8,26 +8,24 @@ PKG_SITE="https://ffmpeg.org"
 PKG_DEPENDS_TARGET="toolchain zlib bzip2 openssl speex"
 PKG_LONGDESC="FFmpeg is a complete, cross-platform solution to record, convert and stream audio and video."
 
+PKG_VERSION="5.1.2"
+PKG_SHA256="619e706d662c8420859832ddc259cd4d4096a48a2ce1eefd052db9e440eef3dc"
+PKG_URL="http://ffmpeg.org/releases/ffmpeg-${PKG_VERSION}.tar.xz"
+PKG_PATCH_DIRS="kodi libreelec"
+
 case "${PROJECT}" in
   Amlogic)
-    PKG_VERSION="f9638b6331277e53ecd9276db5fe6dcd91d44c57"
-    PKG_FFMPEG_BRANCH="dev/4.4/rpi_import_1"
-    PKG_SHA256="3b42cbffd15d95d59e402475fcdb1aaac9ae6a8404a521b95d1fe79c6b2baad4"
+    PKG_VERSION="105c1cbdf43c288573620276ae8a90c2177fb428"
+    PKG_FFMPEG_BRANCH="dev/5.1.2/rpi_import_1"
+    PKG_SHA256="7ac01823790435f14ca7a509d98ce838b4451d0e0ddface76e1dcd7376b2f875"
     PKG_URL="https://github.com/jc-kynesim/rpi-ffmpeg/archive/${PKG_VERSION}.tar.gz"
-    PKG_PATCH_DIRS="libreelec dav1d"
     ;;
   RPi)
-    PKG_VERSION="4.4.1-Nexus-Alpha1"
-    PKG_SHA256="abbce62231baffe237e412689c71ffe01bfc83135afd375f1e538caae87729ed"
-    PKG_URL="https://github.com/xbmc/FFmpeg/archive/${PKG_VERSION}.tar.gz"
-    PKG_FFMPEG_RPI="--disable-mmal --disable-rpi --enable-sand"
-    PKG_PATCH_DIRS="libreelec rpi"
+    PKG_FFMPEG_RPI="--disable-mmal --enable-sand"
+    PKG_PATCH_DIRS+=" rpi"
     ;;
   *)
-    PKG_VERSION="4.4.1-Nexus-Alpha1"
-    PKG_SHA256="abbce62231baffe237e412689c71ffe01bfc83135afd375f1e538caae87729ed"
-    PKG_URL="https://github.com/xbmc/FFmpeg/archive/${PKG_VERSION}.tar.gz"
-    PKG_PATCH_DIRS="libreelec v4l2-request v4l2-drmprime"
+    PKG_PATCH_DIRS+=" v4l2-request v4l2-drmprime"
     ;;
 esac
 
@@ -50,14 +48,8 @@ if [ "${V4L2_SUPPORT}" = "yes" ]; then
   PKG_NEED_UNPACK+=" $(get_pkg_directory libdrm)"
   PKG_FFMPEG_V4L2="--enable-v4l2_m2m --enable-libdrm"
 
-  if [ "${PROJECT}" = "Allwinner" -o "${PROJECT}" = "Rockchip" -o "${DEVICE}" = "iMX8" ]; then
+  if [ "${PROJECT}" = "Allwinner" -o "${PROJECT}" = "Rockchip" -o "${DEVICE}" = "iMX8" -o "${DEVICE}" = "RPi4" ]; then
     PKG_V4L2_REQUEST="yes"
-  elif [ "${PROJECT}" = "RPi" -a "${DEVICE}" = "RPi4" ]; then
-    PKG_V4L2_REQUEST="yes"
-    PKG_FFMPEG_HWACCEL="--disable-hwaccel=h264_v4l2request \
-                        --disable-hwaccel=mpeg2_v4l2request \
-                        --disable-hwaccel=vp8_v4l2request \
-                        --disable-hwaccel=vp9_v4l2request"
   else
     PKG_V4L2_REQUEST="no"
   fi
