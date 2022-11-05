@@ -28,19 +28,9 @@ create_patch() {
   PATCH_CREATE_DIFF="no"
 
   case "${FEATURE_SET}" in
-    v4l2-drmprime)
+    v4l2-drmprime|v4l2-request)
       REPO="https://github.com/jernejsk/FFmpeg"
-      REFSPEC="v4l2-drmprime-v6-4.4.1-Nexus-Alpha1"
-      # TODO
-      BASE_REPO="https://github.com/xbmc/FFmpeg"
-      BASE_VERSION="4.4.1-Nexus-Alpha1"
-      ;;
-    v4l2-request)
-      REPO="https://github.com/jernejsk/FFmpeg"
-      REFSPEC="v4l2-request-hwaccel-4.4.1-Nexus-Alpha1"
-      # TODO
-      BASE_REPO="https://github.com/xbmc/FFmpeg"
-      BASE_VERSION="4.4.1-Nexus-Alpha1"
+      REFSPEC="${FEATURE_SET}-${FFMPEG_VERSION}"
       ;;
     libreelec)
       REPO="https://github.com/LibreELEC/FFmpeg"
