@@ -1,0 +1,3791 @@
+From 96a924e8576c8e2cae1d7a68d0f7559cf1531c86 Mon Sep 17 00:00:00 2001
+From: Alwin Esch <alwin.esch@web.de>
+Date: Sun, 10 Jul 2022 18:59:52 +0200
+Subject: [PATCH 1/7] FFmpeg5 port
+
+---
+ xbmc/cdrip/EncoderFFmpeg.cpp                  |  96 ++++++---------
+ xbmc/cdrip/EncoderFFmpeg.h                    |   1 -
+ .../AudioEngine/Encoders/AEEncoderFFmpeg.cpp  | 112 +++++++++++-------
+ .../AudioEngine/Engines/ActiveAE/ActiveAE.cpp |  14 +--
+ xbmc/cores/FFmpeg.cpp                         |  14 ++-
+ xbmc/cores/FFmpeg.h                           |  27 +++++
+ .../DVDCodecs/Audio/DVDAudioCodecFFmpeg.cpp   |  12 +-
+ .../Overlay/DVDOverlayCodecFFmpeg.cpp         |   3 +-
+ .../DVDCodecs/Video/DVDVideoCodecFFmpeg.cpp   |  35 +++++-
+ .../DVDCodecs/Video/DVDVideoPPFFmpeg.cpp      |   5 +
+ .../VideoPlayer/DVDCodecs/Video/VAAPI.cpp     |  10 +-
+ .../DVDDemuxers/DVDDemuxClient.cpp            |   3 +-
+ .../DVDDemuxers/DVDDemuxFFmpeg.cpp            |  71 +++++++++--
+ .../DVDInputStreams/InputStreamAddon.cpp      |   3 +-
+ xbmc/filesystem/AudioBookFileDirectory.cpp    |   3 +-
+ xbmc/guilib/FFmpegImage.cpp                   |   6 +-
+ xbmc/music/tags/MusicInfoTagLoaderFFmpeg.cpp  |   2 +-
+ xbmc/video/tags/VideoTagLoaderFFmpeg.cpp      |   2 +-
+ 18 files changed, 283 insertions(+), 136 deletions(-)
+
+diff --git a/xbmc/cdrip/EncoderFFmpeg.cpp b/xbmc/cdrip/EncoderFFmpeg.cpp
+index 2867b7cb67..d0152ac464 100644
+--- a/xbmc/cdrip/EncoderFFmpeg.cpp
++++ b/xbmc/cdrip/EncoderFFmpeg.cpp
+@@ -11,6 +11,7 @@
+ #include "ServiceBroker.h"
+ #include "addons/Addon.h"
+ #include "addons/AddonManager.h"
++#include "cores/FFmpeg.h"
+ #include "settings/Settings.h"
+ #include "settings/SettingsComponent.h"
+ #include "utils/StringUtils.h"
+@@ -19,23 +20,8 @@
+ #include "utils/log.h"
+ 
+ using namespace KODI::CDRIP;
+-
+-namespace
+-{
+-
+-struct EncoderException : public std::exception
+-{
+-  std::string s;
+-  template<typename... Args>
+-  EncoderException(const std::string& fmt, Args&&... args)
+-    : s(StringUtils::Format(fmt, std::forward<Args>(args)...))
+-  {
+-  }
+-  ~EncoderException() throw() {} // Updated
+-  const char* what() const throw() { return s.c_str(); }
+-};
+-
+-} /* namespace */
++using FFMPEG_HELP_TOOLS::FFMpegErrorToString;
++using FFMPEG_HELP_TOOLS::FFMpegException;
+ 
+ bool CEncoderFFmpeg::Init()
+ {
+@@ -54,7 +40,7 @@ bool CEncoderFFmpeg::Init()
+     }
+     else
+     {
+-      throw EncoderException("Could not get add-on: {}", addonId);
++      throw FFMpegException("Could not get add-on: {}", addonId);
+     }
+ 
+     // Hack fix about PTS on generated files.
+@@ -66,45 +52,45 @@ bool CEncoderFFmpeg::Init()
+     else if (addonId == "audioencoder.kodi.builtin.wma")
+       m_samplesCountMultiply = 1000;
+     else
+-      throw EncoderException("Internal add-on id \"{}\" not known as usable", addonId);
++      throw FFMpegException("Internal add-on id \"{}\" not known as usable", addonId);
+ 
+     const std::string filename = URIUtils::GetFileName(m_strFile);
+ 
+     m_formatCtx = avformat_alloc_context();
+     if (!m_formatCtx)
+-      throw EncoderException("Could not allocate output format context");
++      throw FFMpegException("Could not allocate output format context");
+ 
+     m_bcBuffer = static_cast<uint8_t*>(av_malloc(BUFFER_SIZE + AV_INPUT_BUFFER_PADDING_SIZE));
+     if (!m_bcBuffer)
+-      throw EncoderException("Could not allocate buffer");
++      throw FFMpegException("Could not allocate buffer");
+ 
+     m_formatCtx->pb = avio_alloc_context(m_bcBuffer, BUFFER_SIZE, AVIO_FLAG_WRITE, this, nullptr,
+                                          avio_write_callback, avio_seek_callback);
+     if (!m_formatCtx->pb)
+-      throw EncoderException("Failed to allocate ByteIOContext");
++      throw FFMpegException("Failed to allocate ByteIOContext");
+ 
+     /* Guess the desired container format based on the file extension. */
+     m_formatCtx->oformat = av_guess_format(nullptr, filename.c_str(), nullptr);
+     if (!m_formatCtx->oformat)
+-      throw EncoderException("Could not find output file format");
++      throw FFMpegException("Could not find output file format");
+ 
+     m_formatCtx->url = av_strdup(filename.c_str());
+     if (!m_formatCtx->url)
+-      throw EncoderException("Could not allocate url");
++      throw FFMpegException("Could not allocate url");
+ 
+     /* Find the encoder to be used by its name. */
+-    AVCodec* codec = avcodec_find_encoder(m_formatCtx->oformat->audio_codec);
++    FFMPEG_FMT_CONST AVCodec* codec = avcodec_find_encoder(m_formatCtx->oformat->audio_codec);
+     if (!codec)
+-      throw EncoderException("Unable to find a suitable FFmpeg encoder");
++      throw FFMpegException("Unable to find a suitable FFmpeg encoder");
+ 
+     /* Create a new audio stream in the output file container. */
+     m_stream = avformat_new_stream(m_formatCtx, nullptr);
+     if (!m_stream)
+-      throw EncoderException("Failed to allocate AVStream context");
++      throw FFMpegException("Failed to allocate AVStream context");
+ 
+     m_codecCtx = avcodec_alloc_context3(codec);
+     if (!m_codecCtx)
+-      throw EncoderException("Failed to allocate the encoder context");
++      throw FFMpegException("Failed to allocate the encoder context");
+ 
+     /* Set the basic encoder parameters.
+      * The input file's sample rate is used to avoid a sample rate conversion. */
+@@ -128,14 +114,14 @@ bool CEncoderFFmpeg::Init()
+ 
+     int err = avcodec_open2(m_codecCtx, codec, nullptr);
+     if (err < 0)
+-      throw EncoderException("Failed to open the codec {} (error '{}')",
+-                             codec->long_name ? codec->long_name : codec->name,
+-                             FFmpegErrorToString(err));
++      throw FFMpegException("Failed to open the codec {} (error '{}')",
++                            codec->long_name ? codec->long_name : codec->name,
++                            FFMpegErrorToString(err));
+ 
+     err = avcodec_parameters_from_context(m_stream->codecpar, m_codecCtx);
+     if (err < 0)
+-      throw EncoderException("Failed to copy encoder parameters to output stream (error '{}')",
+-                             FFmpegErrorToString(err));
++      throw FFMpegException("Failed to copy encoder parameters to output stream (error '{}')",
++                            FFMpegErrorToString(err));
+ 
+     m_inFormat = GetInputFormat(m_iInBitsPerSample);
+     m_outFormat = m_codecCtx->sample_fmt;
+@@ -150,7 +136,7 @@ bool CEncoderFFmpeg::Init()
+ 
+     m_bufferFrame = av_frame_alloc();
+     if (!m_bufferFrame || !m_buffer)
+-      throw EncoderException("Failed to allocate necessary buffers");
++      throw FFMpegException("Failed to allocate necessary buffers");
+ 
+     m_bufferFrame->nb_samples = m_codecCtx->frame_size;
+     m_bufferFrame->format = m_inFormat;
+@@ -159,8 +145,8 @@ bool CEncoderFFmpeg::Init()
+ 
+     err = av_frame_get_buffer(m_bufferFrame, 0);
+     if (err < 0)
+-      throw EncoderException("Could not allocate output frame samples (error '{}')",
+-                             FFmpegErrorToString(err));
++      throw FFMpegException("Could not allocate output frame samples (error '{}')",
++                            FFMpegErrorToString(err));
+ 
+     avcodec_fill_audio_frame(m_bufferFrame, m_iInChannels, m_inFormat, m_buffer, m_neededBytes, 0);
+ 
+@@ -170,14 +156,14 @@ bool CEncoderFFmpeg::Init()
+                                     m_codecCtx->sample_rate, m_codecCtx->channel_layout, m_inFormat,
+                                     m_codecCtx->sample_rate, 0, nullptr);
+       if (!m_swrCtx || swr_init(m_swrCtx) < 0)
+-        throw EncoderException("Failed to initialize the resampler");
++        throw FFMpegException("Failed to initialize the resampler");
+ 
+       m_resampledBufferSize =
+           av_samples_get_buffer_size(nullptr, m_iInChannels, m_neededFrames, m_outFormat, 0);
+       m_resampledBuffer = static_cast<uint8_t*>(av_malloc(m_resampledBufferSize));
+       m_resampledFrame = av_frame_alloc();
+       if (!m_resampledBuffer || !m_resampledFrame)
+-        throw EncoderException("Failed to allocate a frame for resampling");
++        throw FFMpegException("Failed to allocate a frame for resampling");
+ 
+       m_resampledFrame->nb_samples = m_neededFrames;
+       m_resampledFrame->format = m_outFormat;
+@@ -186,8 +172,8 @@ bool CEncoderFFmpeg::Init()
+ 
+       err = av_frame_get_buffer(m_resampledFrame, 0);
+       if (err < 0)
+-        throw EncoderException("Could not allocate output resample frame samples (error '{}')",
+-                               FFmpegErrorToString(err));
++        throw FFMpegException("Could not allocate output resample frame samples (error '{}')",
++                              FFMpegErrorToString(err));
+ 
+       avcodec_fill_audio_frame(m_resampledFrame, m_iInChannels, m_outFormat, m_resampledBuffer,
+                                m_resampledBufferSize, 0);
+@@ -204,7 +190,7 @@ bool CEncoderFFmpeg::Init()
+     /* write the header */
+     err = avformat_write_header(m_formatCtx, nullptr);
+     if (err != 0)
+-      throw EncoderException("Failed to write the header (error '{}')", FFmpegErrorToString(err));
++      throw FFMpegException("Failed to write the header (error '{}')", FFMpegErrorToString(err));
+ 
+     CLog::Log(LOGDEBUG, "CEncoderFFmpeg::{} - Successfully initialized with muxer {} and codec {}",
+               __func__,
+@@ -212,7 +198,7 @@ bool CEncoderFFmpeg::Init()
+                                               : m_formatCtx->oformat->name,
+               codec->long_name ? codec->long_name : codec->name);
+   }
+-  catch (EncoderException& caught)
++  catch (const FFMpegException& caught)
+   {
+     CLog::Log(LOGERROR, "CEncoderFFmpeg::{} - {}", __func__, caught.what());
+ 
+@@ -299,7 +285,7 @@ bool CEncoderFFmpeg::WriteFrame()
+       if (swr_convert(m_swrCtx, m_resampledFrame->data, m_neededFrames,
+                       const_cast<const uint8_t**>(m_bufferFrame->extended_data),
+                       m_neededFrames) < 0)
+-        throw EncoderException("Error resampling audio");
++        throw FFMpegException("Error resampling audio");
+ 
+       frame = m_resampledFrame;
+     }
+@@ -316,8 +302,8 @@ bool CEncoderFFmpeg::WriteFrame()
+     m_bufferSize = 0;
+     err = avcodec_send_frame(m_codecCtx, frame);
+     if (err < 0)
+-      throw EncoderException("Error sending a frame for encoding (error '{}')", __func__,
+-                             FFmpegErrorToString(err));
++      throw FFMpegException("Error sending a frame for encoding (error '{}')",
++                            FFMpegErrorToString(err));
+ 
+     while (err >= 0)
+     {
+@@ -329,19 +315,19 @@ bool CEncoderFFmpeg::WriteFrame()
+       }
+       else if (err < 0)
+       {
+-        throw EncoderException("Error during encoding (error '{}')", __func__,
+-                               FFmpegErrorToString(err));
++        throw FFMpegException("Error during encoding (error '{}')", __func__,
++                              FFMpegErrorToString(err));
+       }
+ 
+       err = av_write_frame(m_formatCtx, pkt);
+       if (err < 0)
+-        throw EncoderException("Failed to write the frame data (error '{}')", __func__,
+-                               FFmpegErrorToString(err));
++        throw FFMpegException("Failed to write the frame data (error '{}')", __func__,
++                              FFMpegErrorToString(err));
+ 
+       av_packet_unref(pkt);
+     }
+   }
+-  catch (EncoderException& caught)
++  catch (const FFMpegException& caught)
+   {
+     CLog::Log(LOGERROR, "CEncoderFFmpeg::{} - {}", __func__, caught.what());
+   }
+@@ -400,14 +386,6 @@ AVSampleFormat CEncoderFFmpeg::GetInputFormat(int inBitsPerSample)
+     case 32:
+       return AV_SAMPLE_FMT_S32;
+     default:
+-      throw EncoderException("Invalid input bits per sample");
++      throw FFMpegException("Invalid input bits per sample");
+   }
+ }
+-
+-std::string CEncoderFFmpeg::FFmpegErrorToString(int err)
+-{
+-  std::string text;
+-  text.reserve(AV_ERROR_MAX_STRING_SIZE);
+-  av_strerror(err, text.data(), AV_ERROR_MAX_STRING_SIZE);
+-  return text;
+-}
+diff --git a/xbmc/cdrip/EncoderFFmpeg.h b/xbmc/cdrip/EncoderFFmpeg.h
+index 39112ba3ba..0c2391c7ab 100644
+--- a/xbmc/cdrip/EncoderFFmpeg.h
++++ b/xbmc/cdrip/EncoderFFmpeg.h
+@@ -39,7 +39,6 @@ private:
+   void SetTag(const std::string& tag, const std::string& value);
+   bool WriteFrame();
+   AVSampleFormat GetInputFormat(int inBitsPerSample);
+-  std::string FFmpegErrorToString(int err);
+ 
+   AVFormatContext* m_formatCtx{nullptr};
+   AVCodecContext* m_codecCtx{nullptr};
+diff --git a/xbmc/cores/AudioEngine/Encoders/AEEncoderFFmpeg.cpp b/xbmc/cores/AudioEngine/Encoders/AEEncoderFFmpeg.cpp
+index 09bb26a327..cff9222293 100644
+--- a/xbmc/cores/AudioEngine/Encoders/AEEncoderFFmpeg.cpp
++++ b/xbmc/cores/AudioEngine/Encoders/AEEncoderFFmpeg.cpp
+@@ -10,13 +10,24 @@
+ #define DTS_ENCODE_BITRATE 1411200
+ 
+ #include "cores/AudioEngine/Encoders/AEEncoderFFmpeg.h"
+-#include "cores/AudioEngine/Utils/AEUtil.h"
++
+ #include "ServiceBroker.h"
+-#include "utils/log.h"
++#include "cores/AudioEngine/Utils/AEUtil.h"
++#include "cores/FFmpeg.h"
+ #include "settings/Settings.h"
+ #include "settings/SettingsComponent.h"
+-#include <string.h>
++#include "utils/log.h"
++
++extern "C"
++{
++#include <libavutil/channel_layout.h>
++}
++
+ #include <cassert>
++#include <string.h>
++
++using FFMPEG_HELP_TOOLS::FFMpegErrorToString;
++using FFMPEG_HELP_TOOLS::FFMpegException;
+ 
+ CAEEncoderFFmpeg::CAEEncoderFFmpeg() : m_CodecCtx(NULL), m_SwrCtx(NULL)
+ {
+@@ -81,7 +92,7 @@ bool CAEEncoderFFmpeg::Initialize(AEAudioFormat &format, bool allow_planar_input
+ 
+   bool ac3 = CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_AUDIOOUTPUT_AC3PASSTHROUGH);
+ 
+-  AVCodec *codec = NULL;
++  FFMPEG_FMT_CONST AVCodec* codec = nullptr;
+ 
+   /* fallback to ac3 if we support it, we might not have DTS support */
+   if (ac3)
+@@ -242,63 +253,78 @@ unsigned int CAEEncoderFFmpeg::GetFrames()
+ 
+ int CAEEncoderFFmpeg::Encode(uint8_t *in, int in_size, uint8_t *out, int out_size)
+ {
+-  int got_output;
+-  AVFrame *frame;
++  int size = 0;
++  int err = AVERROR_UNKNOWN;
++  AVFrame* frame = nullptr;
++  AVPacket* pkt = nullptr;
+ 
+   if (!m_CodecCtx)
+-    return 0;
+-
+-  /* allocate the input frame
+-   * sadly, we have to alloc/dealloc it everytime since we have no guarantee the
+-   * data argument will be constant over iterated calls and the frame needs to
+-   * setup pointers inside data */
+-  frame = av_frame_alloc();
+-  if (!frame)
+-    return 0;
++    return size;
+ 
+-  frame->nb_samples = m_CodecCtx->frame_size;
+-  frame->format = m_CodecCtx->sample_fmt;
+-  frame->channel_layout = m_CodecCtx->channel_layout;
+-  frame->channels = m_CodecCtx->channels;
++  try
++  {
++    /* allocate the input frame and output packet
++     * sadly, we have to alloc/dealloc it everytime since we have no guarantee the
++     * data argument will be constant over iterated calls and the frame needs to
++     * setup pointers inside data */
++    frame = av_frame_alloc();
++    pkt = av_packet_alloc();
++    if (!frame || !pkt)
++      throw FFMpegException(
++          "Failed to allocate \"AVFrame\" or \"AVPacket\" for encoding (error '{}')",
++          strerror(errno));
++
++    frame->nb_samples = m_CodecCtx->frame_size;
++    frame->format = m_CodecCtx->sample_fmt;
++    frame->channel_layout = m_CodecCtx->channel_layout;
++    frame->channels = m_CodecCtx->channels;
++
++    avcodec_fill_audio_frame(frame, m_CodecCtx->channels, m_CodecCtx->sample_fmt, in, in_size, 0);
++
++    pkt->size = out_size;
++    pkt->data = out;
++
++    /* encode it */
++    err = avcodec_send_frame(m_CodecCtx, frame);
++    if (err < 0)
++      throw FFMpegException("Error sending a frame for encoding (error '{}')", __func__,
++                            FFMpegErrorToString(err));
++
++    while (err >= 0)
++    {
++      err = avcodec_receive_packet(m_CodecCtx, pkt);
++      if (err == AVERROR(EAGAIN) || err == AVERROR_EOF)
++      {
++        av_frame_free(&frame);
++        av_packet_free(&pkt);
++        return (err == AVERROR(EAGAIN)) ? -1 : 0;
++      }
++      else if (err < 0)
++      {
++        throw FFMpegException("Error during encoding (error '{}')", __func__,
++                              FFMpegErrorToString(err));
++      }
+ 
+-  avcodec_fill_audio_frame(frame, m_CodecCtx->channels, m_CodecCtx->sample_fmt,
+-                    in, in_size, 0);
++      av_packet_unref(pkt);
++    }
+ 
+-  /* initialize the output packet */
+-  AVPacket* pkt = av_packet_alloc();
+-  if (!pkt)
++    size = pkt->size;
++  }
++  catch (const FFMpegException& caught)
+   {
+-    CLog::Log(LOGERROR, "CAEEncoderFFmpeg::{} - av_packet_alloc failed: {}", __FUNCTION__,
+-              strerror(errno));
+-    av_frame_free(&frame);
+-    return 0;
++    CLog::Log(LOGERROR, "CAEEncoderFFmpeg::{} - {}", __func__, caught.what());
+   }
+ 
+-  pkt->size = out_size;
+-  pkt->data = out;
+-
+-  /* encode it */
+-  int ret = avcodec_encode_audio2(m_CodecCtx, pkt, frame, &got_output);
+-
+-  int size = pkt->size;
+-
+   /* free temporary data */
+   av_frame_free(&frame);
+ 
+   /* free the packet */
+   av_packet_free(&pkt);
+ 
+-  if (ret < 0 || !got_output)
+-  {
+-    CLog::Log(LOGERROR, "CAEEncoderFFmpeg::Encode - Encoding failed");
+-    return 0;
+-  }
+-
+   /* return the number of frames used */
+   return size;
+ }
+ 
+-
+ int CAEEncoderFFmpeg::GetData(uint8_t **data)
+ {
+   int size;
+diff --git a/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAE.cpp b/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAE.cpp
+index 3947dd5523..6000fe9c63 100644
+--- a/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAE.cpp
++++ b/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAE.cpp
+@@ -16,17 +16,17 @@ using namespace ActiveAE;
+ #include "ActiveAESound.h"
+ #include "ActiveAEStream.h"
+ #include "ServiceBroker.h"
++#include "cores/AudioEngine/AEResampleFactory.h"
++#include "cores/AudioEngine/Encoders/AEEncoderFFmpeg.h"
+ #include "cores/AudioEngine/Interfaces/IAudioCallback.h"
+-#include "cores/AudioEngine/Utils/AEUtil.h"
+ #include "cores/AudioEngine/Utils/AEStreamData.h"
+ #include "cores/AudioEngine/Utils/AEStreamInfo.h"
+-#include "cores/AudioEngine/AEResampleFactory.h"
+-#include "cores/AudioEngine/Encoders/AEEncoderFFmpeg.h"
+-
++#include "cores/AudioEngine/Utils/AEUtil.h"
++#include "cores/FFmpeg.h"
+ #include "settings/Settings.h"
+ #include "settings/SettingsComponent.h"
+-#include "windowing/WinSystem.h"
+ #include "utils/log.h"
++#include "windowing/WinSystem.h"
+ 
+ using namespace std::chrono_literals;
+ 
+@@ -3016,8 +3016,8 @@ IAE::SoundPtr CActiveAE::MakeSound(const std::string& file)
+   AVFormatContext *fmt_ctx = nullptr;
+   AVCodecContext *dec_ctx = nullptr;
+   AVIOContext *io_ctx;
+-  AVInputFormat *io_fmt = nullptr;
+-  AVCodec *dec = nullptr;
++  FFMPEG_FMT_CONST AVInputFormat* io_fmt = nullptr;
++  FFMPEG_FMT_CONST AVCodec* dec = nullptr;
+   SampleConfig config;
+ 
+   // No custom deleter until sound is registered
+diff --git a/xbmc/cores/FFmpeg.cpp b/xbmc/cores/FFmpeg.cpp
+index 03a29f7db4..697d9ce913 100644
+--- a/xbmc/cores/FFmpeg.cpp
++++ b/xbmc/cores/FFmpeg.cpp
+@@ -21,6 +21,19 @@
+ 
+ static thread_local CFFmpegLog* CFFmpegLogTls;
+ 
++namespace FFMPEG_HELP_TOOLS
++{
++
++std::string FFMpegErrorToString(int err)
++{
++  std::string text;
++  text.reserve(AV_ERROR_MAX_STRING_SIZE);
++  av_strerror(err, text.data(), AV_ERROR_MAX_STRING_SIZE);
++  return text;
++}
++
++} // namespace FFMPEG_HELP_TOOLS
++
+ void CFFmpegLog::SetLogLevel(int level)
+ {
+   CFFmpegLog::ClearLogLevel();
+@@ -116,4 +129,3 @@ void ff_avutil_log(void* ptr, int level, const char* format, va_list va)
+   }
+   buffer.erase(0, start);
+ }
+-
+diff --git a/xbmc/cores/FFmpeg.h b/xbmc/cores/FFmpeg.h
+index e1194d19e9..3d4de85fd6 100644
+--- a/xbmc/cores/FFmpeg.h
++++ b/xbmc/cores/FFmpeg.h
+@@ -10,6 +10,7 @@
+ 
+ #include "ServiceBroker.h"
+ #include "utils/CPUInfo.h"
++#include "utils/StringUtils.h"
+ 
+ extern "C" {
+ #include <libavcodec/avcodec.h>
+@@ -21,6 +22,32 @@ extern "C" {
+ #include <libpostproc/postprocess.h>
+ }
+ 
++// https://github.com/FFmpeg/FFmpeg/blob/56450a0ee4/doc/APIchanges#L18-L26
++#if LIBAVFORMAT_BUILD >= AV_VERSION_INT(59, 0, 100)
++#define FFMPEG_FMT_CONST const
++#else
++#define FFMPEG_FMT_CONST
++#endif
++
++namespace FFMPEG_HELP_TOOLS
++{
++
++struct FFMpegException : public std::exception
++{
++  std::string s;
++  template<typename... Args>
++  FFMpegException(const std::string& fmt, Args&&... args)
++    : s(StringUtils::Format(fmt, std::forward<Args>(args)...))
++  {
++  }
++  ~FFMpegException() throw() {} // Updated
++  const char* what() const throw() { return s.c_str(); }
++};
++
++std::string FFMpegErrorToString(int err);
++
++} // namespace FFMPEG_HELP_TOOLS
++
+ inline int PPCPUFlags()
+ {
+   unsigned int cpuFeatures = CServiceBroker::GetCPUInfo()->GetCPUFeatures();
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Audio/DVDAudioCodecFFmpeg.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Audio/DVDAudioCodecFFmpeg.cpp
+index 25f3f08e1f..87e7ae2c57 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Audio/DVDAudioCodecFFmpeg.cpp
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Audio/DVDAudioCodecFFmpeg.cpp
+@@ -7,14 +7,16 @@
+  */
+ 
+ #include "DVDAudioCodecFFmpeg.h"
+-#include "ServiceBroker.h"
++
+ #include "../../DVDStreamInfo.h"
+-#include "utils/log.h"
++#include "DVDCodecs/DVDCodecs.h"
++#include "ServiceBroker.h"
++#include "cores/AudioEngine/Utils/AEUtil.h"
++#include "cores/FFmpeg.h"
+ #include "settings/AdvancedSettings.h"
+ #include "settings/Settings.h"
+ #include "settings/SettingsComponent.h"
+-#include "DVDCodecs/DVDCodecs.h"
+-#include "cores/AudioEngine/Utils/AEUtil.h"
++#include "utils/log.h"
+ 
+ extern "C" {
+ #include <libavutil/opt.h>
+@@ -44,7 +46,7 @@ bool CDVDAudioCodecFFmpeg::Open(CDVDStreamInfo &hints, CDVDCodecOptions &options
+     return false;
+   }
+ 
+-  AVCodec* pCodec = NULL;
++  FFMPEG_FMT_CONST AVCodec* pCodec = nullptr;
+   bool allowdtshddecode = true;
+ 
+   // set any special options
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlayCodecFFmpeg.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlayCodecFFmpeg.cpp
+index 8c26cad306..3657fc093c 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlayCodecFFmpeg.cpp
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlayCodecFFmpeg.cpp
+@@ -10,6 +10,7 @@
+ 
+ #include "DVDOverlayImage.h"
+ #include "DVDStreamInfo.h"
++#include "cores/FFmpeg.h"
+ #include "cores/VideoPlayer/Interface/DemuxPacket.h"
+ #include "cores/VideoPlayer/Interface/TimingConstants.h"
+ #include "utils/EndianSwap.h"
+@@ -39,7 +40,7 @@ bool CDVDOverlayCodecFFmpeg::Open(CDVDStreamInfo &hints, CDVDCodecOptions &optio
+   if (hints.codec == AV_CODEC_ID_EIA_608)
+     return false;
+ 
+-  AVCodec* pCodec = avcodec_find_decoder(hints.codec);
++  FFMPEG_FMT_CONST AVCodec* pCodec = avcodec_find_decoder(hints.codec);
+   if (!pCodec)
+   {
+     CLog::Log(LOGDEBUG, "{} - Unable to find codec {}", __FUNCTION__, hints.codec);
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecFFmpeg.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecFFmpeg.cpp
+index 881c02ec12..e0c93520b3 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecFFmpeg.cpp
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecFFmpeg.cpp
+@@ -12,6 +12,7 @@
+ #include "DVDCodecs/DVDFactoryCodec.h"
+ #include "DVDStreamInfo.h"
+ #include "ServiceBroker.h"
++#include "cores/FFmpeg.h"
+ #include "cores/VideoPlayer/Interface/TimingConstants.h"
+ #include "cores/VideoPlayer/VideoRenderers/RenderManager.h"
+ #include "cores/VideoSettings.h"
+@@ -27,12 +28,13 @@
+ #include <mutex>
+ 
+ extern "C" {
+-#include <libavutil/opt.h>
+-#include <libavutil/mastering_display_metadata.h>
+ #include <libavfilter/avfilter.h>
+ #include <libavfilter/buffersink.h>
+ #include <libavfilter/buffersrc.h>
++#include <libavutil/mastering_display_metadata.h>
++#include <libavutil/opt.h>
+ #include <libavutil/pixdesc.h>
++#include <libavutil/video_enc_params.h>
+ }
+ 
+ #ifndef TARGET_POSIX
+@@ -327,7 +329,7 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints, CDVDCodecOptions &options
+   m_hints = hints;
+   m_options = options;
+ 
+-  AVCodec* pCodec = nullptr;
++  FFMPEG_FMT_CONST AVCodec* pCodec = nullptr;
+ 
+   m_iOrientation = hints.orientation;
+ 
+@@ -1048,6 +1050,32 @@ bool CDVDVideoCodecFFmpeg::GetPictureCommon(VideoPicture* pVideoPicture)
+   pVideoPicture->qscale_type = 0;
+ 
+   AVFrameSideData* sd;
++
++  // https://github.com/FFmpeg/FFmpeg/blob/991d417692/doc/APIchanges#L18-L20
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(58, 84, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(56, 45, 100)
++  sd = av_frame_get_side_data(m_pFrame, AV_FRAME_DATA_VIDEO_ENC_PARAMS);
++  if (sd)
++  {
++    unsigned int mb_h = (m_pFrame->height + 15) / 16;
++    unsigned int mb_w = (m_pFrame->width + 15) / 16;
++    unsigned int nb_mb = mb_h * mb_w;
++    unsigned int block_idx;
++
++    auto par = reinterpret_cast<AVVideoEncParams*>(sd->data);
++    if (par->type == AV_VIDEO_ENC_PARAMS_MPEG2 && (par->nb_blocks == 0 || par->nb_blocks == nb_mb))
++    {
++      pVideoPicture->qstride = mb_w;
++      pVideoPicture->qscale_type = par->type;
++      pVideoPicture->qp_table = static_cast<int8_t*>(av_malloc(nb_mb));
++      for (block_idx = 0; block_idx < nb_mb; block_idx++)
++      {
++        AVVideoBlockParams* b = av_video_enc_params_block(par, block_idx);
++        pVideoPicture->qp_table[block_idx] = par->qp + b->delta_qp;
++      }
++    }
++  }
++#else
+   sd = av_frame_get_side_data(m_pFrame, AV_FRAME_DATA_QP_TABLE_PROPERTIES);
+   if (sd)
+   {
+@@ -1068,6 +1096,7 @@ bool CDVDVideoCodecFFmpeg::GetPictureCommon(VideoPicture* pVideoPicture)
+       pVideoPicture->qscale_type = qp->type;
+     }
+   }
++#endif
+ 
+   pVideoPicture->pict_type = m_pFrame->pict_type;
+ 
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoPPFFmpeg.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoPPFFmpeg.cpp
+index a98fbb1710..3b2739cd22 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoPPFFmpeg.cpp
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoPPFFmpeg.cpp
+@@ -118,6 +118,11 @@ void CDVDVideoPPFFmpeg::Process(VideoPicture* pPicture)
+                  m_pMode, m_pContext,
+                  pSource->pict_type | pSource->qscale_type ? PP_PICT_TYPE_QP2 : 0);
+ 
++  // https://github.com/FFmpeg/FFmpeg/blob/991d417692/doc/APIchanges#L18-L20
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(58, 84, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(56, 45, 100)
++  av_free(pSource->qp_table);
++#endif
+ 
+   pPicture->SetParams(*pSource);
+   if (pPicture->videoBuffer)
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/VAAPI.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Video/VAAPI.cpp
+index 5e89c8f780..8d727e2270 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/VAAPI.cpp
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/VAAPI.cpp
+@@ -1255,8 +1255,16 @@ void CDecoder::ReturnRenderPicture(CVaapiRenderPicture *renderPic)
+ 
+ IHardwareDecoder* CDecoder::Create(CDVDStreamInfo &hint, CProcessInfo &processInfo, AVPixelFormat fmt)
+ {
+-  if (fmt == AV_PIX_FMT_VAAPI_VLD && CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(SETTING_VIDEOPLAYER_USEVAAPI))
++  // https://github.com/FFmpeg/FFmpeg/blob/56450a0ee4fdda160f4039fc2ae33edfd27765c9/doc/APIchanges#L18-L26
++#if LIBAVUTIL_BUILD >= AV_VERSION_INT(55, 8, 0)
++#define PIX_FMT_VAAPI AV_PIX_FMT_VAAPI
++#else
++#define PIX_FMT_VAAPI AV_PIX_FMT_VAAPI_VLD
++#endif
++  if (fmt == PIX_FMT_VAAPI &&
++      CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(SETTING_VIDEOPLAYER_USEVAAPI))
+     return new VAAPI::CDecoder(processInfo);
++#undef PIX_FMT_VAAPI
+ 
+   return nullptr;
+ }
+diff --git a/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxClient.cpp b/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxClient.cpp
+index a6f0a8d6d7..8b9f53bdd7 100644
+--- a/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxClient.cpp
++++ b/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxClient.cpp
+@@ -10,6 +10,7 @@
+ 
+ #include "DVDDemuxUtils.h"
+ #include "DVDInputStreams/DVDInputStream.h"
++#include "cores/FFmpeg.h"
+ #include "cores/VideoPlayer/Interface/TimingConstants.h"
+ #include "utils/log.h"
+ 
+@@ -130,7 +131,7 @@ bool CDVDDemuxClient::ParsePacket(DemuxPacket* pkt)
+ 
+   if (stream->m_context == nullptr)
+   {
+-    AVCodec *codec = avcodec_find_decoder(st->codec);
++    FFMPEG_FMT_CONST AVCodec* codec = avcodec_find_decoder(st->codec);
+     if (codec == nullptr)
+     {
+       CLog::Log(LOGERROR, "{} - can't find decoder", __FUNCTION__);
+diff --git a/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxFFmpeg.cpp b/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxFFmpeg.cpp
+index fb54673d9e..27fb3e4fc0 100644
+--- a/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxFFmpeg.cpp
++++ b/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxFFmpeg.cpp
+@@ -38,6 +38,7 @@
+ 
+ extern "C"
+ {
++#include "libavutil/channel_layout.h"
+ #include "libavutil/pixdesc.h"
+ }
+ 
+@@ -235,7 +236,7 @@ bool CDVDDemuxFFmpeg::Aborted()
+ 
+ bool CDVDDemuxFFmpeg::Open(const std::shared_ptr<CDVDInputStream>& pInput, bool fileinfo)
+ {
+-  AVInputFormat* iformat = NULL;
++  FFMPEG_FMT_CONST AVInputFormat* iformat = nullptr;
+   std::string strFile;
+   m_streaminfo = !pInput->IsRealtime() && !m_reopen;
+   m_reopen = false;
+@@ -422,9 +423,7 @@ bool CDVDDemuxFFmpeg::Open(const std::shared_ptr<CDVDInputStream>& pInput, bool
+           // is present, we assume it is PCM audio.
+           // AC3 is always wrapped in iec61937 (ffmpeg "spdif"), while DTS
+           // may be just padded.
+-          AVInputFormat* iformat2;
+-          iformat2 = av_find_input_format("spdif");
+-
++          FFMPEG_FMT_CONST AVInputFormat* iformat2 = av_find_input_format("spdif");
+           if (iformat2 && iformat2->read_probe(&pd) > AVPROBE_SCORE_MAX / 4)
+           {
+             iformat = iformat2;
+@@ -544,11 +543,14 @@ bool CDVDDemuxFFmpeg::Open(const std::shared_ptr<CDVDInputStream>& pInput, bool
+     m_streaminfo = true;
+   }
+ 
++  // https://github.com/FFmpeg/FFmpeg/blob/56450a0ee4/doc/APIchanges#L18-L26
++#if LIBAVFORMAT_BUILD < AV_VERSION_INT(59, 0, 100)
+   if (iformat && (strcmp(iformat->name, "mov,mp4,m4a,3gp,3g2,mj2") == 0))
+   {
+     if (URIUtils::IsRemote(strFile))
+       m_pFormatContext->iformat->flags |= AVFMT_NOGENSEARCH;
+   }
++#endif
+ 
+   // we need to know if this is matroska, avi or sup later
+   m_bMatroska = strncmp(m_pFormatContext->iformat->name, "matroska", 8) == 0;	// for "matroska.webm"
+@@ -604,8 +606,11 @@ bool CDVDDemuxFFmpeg::Open(const std::shared_ptr<CDVDInputStream>& pInput, bool
+   // if format can be nonblocking, let's use that
+   m_pFormatContext->flags |= AVFMT_FLAG_NONBLOCK;
+ 
+-  // deprecated, will be always set in future versions
++  // https://github.com/FFmpeg/FFmpeg/blob/d682ae70b4/doc/APIchanges#L18-L21
++#if LIBAVFORMAT_BUILD < AV_VERSION_INT(57, 66, 105) && \
++    LIBAVCODEC_BUILD < AV_VERSION_INT(57, 83, 101)
+   m_pFormatContext->flags |= AVFMT_FLAG_KEEP_SIDE_DATA;
++#endif
+ 
+   UpdateCurrentPTS();
+ 
+@@ -647,12 +652,24 @@ bool CDVDDemuxFFmpeg::Open(const std::shared_ptr<CDVDInputStream>& pInput, bool
+           {
+             int idx = m_pFormatContext->programs[i]->stream_index[j];
+             AVStream* st = m_pFormatContext->streams[idx];
++#if LIBAVFORMAT_BUILD >= AV_VERSION_INT(59, 3, 100)
++            // Related to https://patchwork.ffmpeg.org/project/ffmpeg/patch/20210429143825.53040-1-jamrial@gmail.com/
++            // has been replaced with AVSTREAM_EVENT_FLAG_NEW_PACKETS.
++            if ((st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
++                 (st->event_flags & AVSTREAM_EVENT_FLAG_NEW_PACKETS)) ||
++                (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && st->codecpar->sample_rate > 0))
++            {
++              nProgram = i;
++              break;
++            }
++#else
+             if ((st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && st->codec_info_nb_frames > 0) ||
+                 (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && st->codecpar->sample_rate > 0))
+             {
+               nProgram = i;
+               break;
+             }
++#endif
+           }
+         }
+       }
+@@ -1401,11 +1418,19 @@ void CDVDDemuxFFmpeg::UpdateCurrentPTS()
+   if (idx >= 0)
+   {
+     AVStream* stream = m_pFormatContext->streams[idx];
++#if LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 17, 100)
++    if (stream && m_pkt.pkt.dts != (int64_t)AV_NOPTS_VALUE)
++    {
++      double ts = ConvertTimestamp(m_pkt.pkt.dts, stream->time_base.den, stream->time_base.num);
++      m_currentPts = ts;
++    }
++#else
+     if (stream && stream->cur_dts != (int64_t)AV_NOPTS_VALUE)
+     {
+       double ts = ConvertTimestamp(stream->cur_dts, stream->time_base.den, stream->time_base.num);
+       m_currentPts = ts;
+     }
++#endif
+   }
+ }
+ 
+@@ -1621,7 +1646,12 @@ CDemuxStream* CDVDDemuxFFmpeg::AddStream(int streamIdx)
+         st->iBitsPerSample = pStream->codecpar->bits_per_raw_sample;
+         st->iChannelLayout = pStream->codecpar->channel_layout;
+         char buf[32] = {};
++        // https://github.com/FFmpeg/FFmpeg/blob/6ccc3989d15/doc/APIchanges#L50-L53
++#if LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 24, 100)
++        av_channel_layout_describe(st->iChannelLayout, buf, sizeof(buf));
++#else
+         av_get_channel_layout_string(buf, 31, st->iChannels, st->iChannelLayout);
++#endif
+         st->m_channelLayoutName = buf;
+         if (st->iBitsPerSample == 0)
+           st->iBitsPerSample = pStream->codecpar->bits_per_coded_sample;
+@@ -1663,6 +1693,7 @@ CDemuxStream* CDVDDemuxFFmpeg::AddStream(int streamIdx)
+           st->iFpsScale = 0;
+         }
+ 
++#if LIBAVFORMAT_BUILD < AV_VERSION_INT(59, 3, 100)
+         if (pStream->codec_info_nb_frames > 0 &&
+             pStream->codec_info_nb_frames <= 2 &&
+             m_pInput->IsStreamType(DVDSTREAM_TYPE_DVD))
+@@ -1672,6 +1703,7 @@ CDemuxStream* CDVDDemuxFFmpeg::AddStream(int streamIdx)
+           st->iFpsRate  = 0;
+           st->iFpsScale = 0;
+         }
++#endif
+ 
+         st->iWidth = pStream->codecpar->width;
+         st->iHeight = pStream->codecpar->height;
+@@ -1693,7 +1725,12 @@ CDemuxStream* CDVDDemuxFFmpeg::AddStream(int streamIdx)
+         st->colorRange = pStream->codecpar->color_range;
+         st->hdr_type = DetermineHdrType(pStream);
+ 
++        // https://github.com/FFmpeg/FFmpeg/blob/release/5.0/doc/APIchanges
++#if LIBAVFORMAT_BUILD >= AV_VERSION_INT(59, 10, 100)
++        size_t size = 0;
++#else
+         int size = 0;
++#endif
+         uint8_t* side_data = nullptr;
+ 
+         side_data = av_stream_get_side_data(pStream, AV_PKT_DATA_MASTERING_DISPLAY_METADATA, &size);
+@@ -2102,7 +2139,7 @@ std::string CDVDDemuxFFmpeg::GetStreamCodecName(int iStreamId)
+       return strName;
+     }
+ 
+-    AVCodec* codec = avcodec_find_decoder(stream->codec);
++    FFMPEG_FMT_CONST AVCodec* codec = avcodec_find_decoder(stream->codec);
+     if (codec)
+       strName = avcodec_get_name(codec->id);
+   }
+@@ -2278,7 +2315,7 @@ void CDVDDemuxFFmpeg::ParsePacket(AVPacket* pkt)
+ 
+       parser->second->m_parserCtx = av_parser_init(st->codecpar->codec_id);
+ 
+-      AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
++      FFMPEG_FMT_CONST AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
+       if (codec == nullptr)
+       {
+         CLog::Log(LOGERROR, "{} - can't find decoder", __FUNCTION__);
+@@ -2356,7 +2393,12 @@ TRANSPORT_STREAM_STATE CDVDDemuxFFmpeg::TransportStreamAudioState()
+         {
+           if (!m_startTime)
+           {
++#if LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 17, 100)
++            m_startTime =
++                av_rescale(m_pkt.pkt.dts, st->time_base.num, st->time_base.den) - 0.000001;
++#else
+             m_startTime = av_rescale(st->cur_dts, st->time_base.num, st->time_base.den) - 0.000001;
++#endif
+             m_seekStream = idx;
+           }
+           return TRANSPORT_STREAM_STATE::READY;
+@@ -2376,7 +2418,12 @@ TRANSPORT_STREAM_STATE CDVDDemuxFFmpeg::TransportStreamAudioState()
+         {
+           if (!m_startTime)
+           {
++#if LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 17, 100)
++            m_startTime =
++                av_rescale(m_pkt.pkt.dts, st->time_base.num, st->time_base.den) - 0.000001;
++#else
+             m_startTime = av_rescale(st->cur_dts, st->time_base.num, st->time_base.den) - 0.000001;
++#endif
+             m_seekStream = i;
+           }
+           return TRANSPORT_STREAM_STATE::READY;
+@@ -2409,7 +2456,12 @@ TRANSPORT_STREAM_STATE CDVDDemuxFFmpeg::TransportStreamVideoState()
+         {
+           if (!m_startTime)
+           {
++#if LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 17, 100)
++            m_startTime =
++                av_rescale(m_pkt.pkt.dts, st->time_base.num, st->time_base.den) - 0.000001;
++#else
+             m_startTime = av_rescale(st->cur_dts, st->time_base.num, st->time_base.den) - 0.000001;
++#endif
+             m_seekStream = idx;
+           }
+           return TRANSPORT_STREAM_STATE::READY;
+@@ -2429,7 +2481,12 @@ TRANSPORT_STREAM_STATE CDVDDemuxFFmpeg::TransportStreamVideoState()
+         {
+           if (!m_startTime)
+           {
++#if LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 17, 100)
++            m_startTime =
++                av_rescale(m_pkt.pkt.dts, st->time_base.num, st->time_base.den) - 0.000001;
++#else
+             m_startTime = av_rescale(st->cur_dts, st->time_base.num, st->time_base.den) - 0.000001;
++#endif
+             m_seekStream = i;
+           }
+           return TRANSPORT_STREAM_STATE::READY;
+diff --git a/xbmc/cores/VideoPlayer/DVDInputStreams/InputStreamAddon.cpp b/xbmc/cores/VideoPlayer/DVDInputStreams/InputStreamAddon.cpp
+index 52f77ea9cd..cbcd9029c5 100644
+--- a/xbmc/cores/VideoPlayer/DVDInputStreams/InputStreamAddon.cpp
++++ b/xbmc/cores/VideoPlayer/DVDInputStreams/InputStreamAddon.cpp
+@@ -12,6 +12,7 @@
+ #include "addons/addoninfo/AddonType.h"
+ #include "addons/binary-addons/AddonDll.h"
+ #include "addons/kodi-dev-kit/include/kodi/addon-instance/VideoCodec.h"
++#include "cores/FFmpeg.h"
+ #include "cores/VideoPlayer/DVDDemuxers/DVDDemux.h"
+ #include "cores/VideoPlayer/DVDDemuxers/DVDDemuxUtils.h"
+ #include "cores/VideoPlayer/Interface/DemuxCrypto.h"
+@@ -392,7 +393,7 @@ KODI_HANDLE CInputStreamAddon::cb_get_stream_transfer(KODI_HANDLE handle,
+     return nullptr;
+ 
+   std::string codecName(stream->m_codecName);
+-  AVCodec* codec = nullptr;
++  FFMPEG_FMT_CONST AVCodec* codec = nullptr;
+ 
+   if (stream->m_streamType != INPUTSTREAM_TYPE_TELETEXT &&
+       stream->m_streamType != INPUTSTREAM_TYPE_RDS && stream->m_streamType != INPUTSTREAM_TYPE_ID3)
+diff --git a/xbmc/filesystem/AudioBookFileDirectory.cpp b/xbmc/filesystem/AudioBookFileDirectory.cpp
+index 04d1c14343..d82b2a9bbd 100644
+--- a/xbmc/filesystem/AudioBookFileDirectory.cpp
++++ b/xbmc/filesystem/AudioBookFileDirectory.cpp
+@@ -11,6 +11,7 @@
+ #include "TextureDatabase.h"
+ #include "URL.h"
+ #include "Util.h"
++#include "cores/FFmpeg.h"
+ #include "filesystem/File.h"
+ #include "guilib/LocalizeStrings.h"
+ #include "music/tags/MusicInfoTag.h"
+@@ -149,7 +150,7 @@ bool CAudioBookFileDirectory::ContainsFiles(const CURL& url)
+ 
+   m_ioctx->max_packet_size = 32768;
+ 
+-  AVInputFormat* iformat=nullptr;
++  FFMPEG_FMT_CONST AVInputFormat* iformat = nullptr;
+   av_probe_input_buffer(m_ioctx, &iformat, url.Get().c_str(), nullptr, 0, 0);
+ 
+   bool contains = false;
+diff --git a/xbmc/guilib/FFmpegImage.cpp b/xbmc/guilib/FFmpegImage.cpp
+index fa255278b7..9d01a21f38 100644
+--- a/xbmc/guilib/FFmpegImage.cpp
++++ b/xbmc/guilib/FFmpegImage.cpp
+@@ -52,7 +52,7 @@ struct ThumbDataManagement
+   AVFrame* frame_temporary = nullptr;
+   SwsContext* sws = nullptr;
+   AVCodecContext* avOutctx = nullptr;
+-  AVCodec* codec = nullptr;
++  FFMPEG_FMT_CONST AVCodec* codec = nullptr;
+   ~ThumbDataManagement()
+   {
+     av_free(intermediateBuffer);
+@@ -198,7 +198,7 @@ bool CFFmpegImage::Initialize(unsigned char* buffer, size_t bufSize)
+   bool is_png = (bufSize > 3 && buffer[1] == 'P' && buffer[2] == 'N' && buffer[3] == 'G');
+   bool is_tiff = (bufSize > 2 && buffer[0] == 'I' && buffer[1] == 'I' && buffer[2] == '*');
+ 
+-  AVInputFormat* inp = nullptr;
++  FFMPEG_FMT_CONST AVInputFormat* inp = nullptr;
+   if (is_jpeg)
+     inp = av_find_input_format("image2");
+   else if (m_strMimeType == "image/apng")
+@@ -236,7 +236,7 @@ bool CFFmpegImage::Initialize(unsigned char* buffer, size_t bufSize)
+     return false;
+   }
+   AVCodecParameters* codec_params = m_fctx->streams[0]->codecpar;
+-  AVCodec* codec = avcodec_find_decoder(codec_params->codec_id);
++  FFMPEG_FMT_CONST AVCodec* codec = avcodec_find_decoder(codec_params->codec_id);
+   m_codec_ctx = avcodec_alloc_context3(codec);
+   if (!m_codec_ctx)
+   {
+diff --git a/xbmc/music/tags/MusicInfoTagLoaderFFmpeg.cpp b/xbmc/music/tags/MusicInfoTagLoaderFFmpeg.cpp
+index 9bb2cdc09b..dbd8893c97 100644
+--- a/xbmc/music/tags/MusicInfoTagLoaderFFmpeg.cpp
++++ b/xbmc/music/tags/MusicInfoTagLoaderFFmpeg.cpp
+@@ -58,7 +58,7 @@ bool CMusicInfoTagLoaderFFmpeg::Load(const std::string& strFileName, CMusicInfoT
+   if (file.IoControl(IOCTRL_SEEK_POSSIBLE, NULL) != 1)
+     ioctx->seekable = 0;
+ 
+-  AVInputFormat* iformat=NULL;
++  FFMPEG_FMT_CONST AVInputFormat* iformat = nullptr;
+   av_probe_input_buffer(ioctx, &iformat, strFileName.c_str(), NULL, 0, 0);
+ 
+   if (avformat_open_input(&fctx, strFileName.c_str(), iformat, NULL) < 0)
+diff --git a/xbmc/video/tags/VideoTagLoaderFFmpeg.cpp b/xbmc/video/tags/VideoTagLoaderFFmpeg.cpp
+index c1b0495179..5564696be6 100644
+--- a/xbmc/video/tags/VideoTagLoaderFFmpeg.cpp
++++ b/xbmc/video/tags/VideoTagLoaderFFmpeg.cpp
+@@ -65,7 +65,7 @@ CVideoTagLoaderFFmpeg::CVideoTagLoaderFFmpeg(const CFileItem& item,
+   if (m_file->IoControl(IOCTRL_SEEK_POSSIBLE, nullptr) != 1)
+     m_ioctx->seekable = 0;
+ 
+-  AVInputFormat* iformat = nullptr;
++  FFMPEG_FMT_CONST AVInputFormat* iformat = nullptr;
+   av_probe_input_buffer(m_ioctx, &iformat, m_item.GetPath().c_str(), nullptr, 0, 0);
+   if (avformat_open_input(&m_fctx, m_item.GetPath().c_str(), iformat, nullptr) < 0)
+   {
+-- 
+2.38.0
+
+
+From 609a802c07835d43c84ea9b2797cd8480bcf8f62 Mon Sep 17 00:00:00 2001
+From: Vasyl Gello <vasek.gello@gmail.com>
+Date: Thu, 13 Oct 2022 04:56:26 +0000
+Subject: [PATCH 2/7] Use Channel Layout API if built against FFmpeg 5.1
+
+Signed-off-by: Vasyl Gello <vasek.gello@gmail.com>
+---
+ xbmc/cdrip/EncoderFFmpeg.cpp                  | 51 +++++++++++++
+ .../AudioEngine/Encoders/AEEncoderFFmpeg.cpp  | 60 ++++++++++++++-
+ .../AudioEngine/Engines/ActiveAE/ActiveAE.cpp | 22 ++++++
+ .../Engines/ActiveAE/ActiveAEFilter.cpp       | 38 +++++++++-
+ .../ActiveAE/ActiveAEResampleFFMPEG.cpp       | 55 +++++++++++++-
+ .../Engines/ActiveAE/ActiveAEStream.cpp       |  2 +-
+ xbmc/cores/AudioEngine/Utils/AEUtil.cpp       | 73 +++++++++++++++++--
+ xbmc/cores/AudioEngine/Utils/AEUtil.h         |  9 ++-
+ .../DVDCodecs/Audio/DVDAudioCodecFFmpeg.cpp   | 58 ++++++++++++---
+ .../DVDDemuxers/DVDDemuxClient.cpp            | 15 +++-
+ .../DVDDemuxers/DVDDemuxFFmpeg.cpp            | 42 +++++++++--
+ 11 files changed, 388 insertions(+), 37 deletions(-)
+
+diff --git a/xbmc/cdrip/EncoderFFmpeg.cpp b/xbmc/cdrip/EncoderFFmpeg.cpp
+index d0152ac464..9f78c5b85d 100644
+--- a/xbmc/cdrip/EncoderFFmpeg.cpp
++++ b/xbmc/cdrip/EncoderFFmpeg.cpp
+@@ -94,8 +94,14 @@ bool CEncoderFFmpeg::Init()
+ 
+     /* Set the basic encoder parameters.
+      * The input file's sample rate is used to avoid a sample rate conversion. */
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++    av_channel_layout_uninit(&m_codecCtx->ch_layout);
++    av_channel_layout_default(&m_codecCtx->ch_layout, m_iInChannels);
++#else
+     m_codecCtx->channels = m_iInChannels;
+     m_codecCtx->channel_layout = av_get_default_channel_layout(m_iInChannels);
++#endif
+     m_codecCtx->sample_rate = m_iInSampleRate;
+     m_codecCtx->sample_fmt = codec->sample_fmts[0];
+     m_codecCtx->bit_rate = bitrate;
+@@ -140,7 +146,14 @@ bool CEncoderFFmpeg::Init()
+ 
+     m_bufferFrame->nb_samples = m_codecCtx->frame_size;
+     m_bufferFrame->format = m_inFormat;
++
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++    av_channel_layout_uninit(&m_bufferFrame->ch_layout);
++    av_channel_layout_copy(&m_bufferFrame->ch_layout, &m_codecCtx->ch_layout);
++#else
+     m_bufferFrame->channel_layout = m_codecCtx->channel_layout;
++#endif
+     m_bufferFrame->sample_rate = m_codecCtx->sample_rate;
+ 
+     err = av_frame_get_buffer(m_bufferFrame, 0);
+@@ -152,10 +165,18 @@ bool CEncoderFFmpeg::Init()
+ 
+     if (m_needConversion)
+     {
++#if LIBSWRESAMPLE_BUILD >= AV_VERSION_INT(4, 7, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++      int ret = swr_alloc_set_opts2(&m_swrCtx, &m_codecCtx->ch_layout, m_outFormat,
++                                    m_codecCtx->sample_rate, &m_codecCtx->ch_layout, m_inFormat,
++                                    m_codecCtx->sample_rate, 0, nullptr);
++      if (ret || swr_init(m_swrCtx) < 0)
++#else
+       m_swrCtx = swr_alloc_set_opts(nullptr, m_codecCtx->channel_layout, m_outFormat,
+                                     m_codecCtx->sample_rate, m_codecCtx->channel_layout, m_inFormat,
+                                     m_codecCtx->sample_rate, 0, nullptr);
+       if (!m_swrCtx || swr_init(m_swrCtx) < 0)
++#endif
+         throw FFMpegException("Failed to initialize the resampler");
+ 
+       m_resampledBufferSize =
+@@ -167,7 +188,13 @@ bool CEncoderFFmpeg::Init()
+ 
+       m_resampledFrame->nb_samples = m_neededFrames;
+       m_resampledFrame->format = m_outFormat;
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++      av_channel_layout_uninit(&m_resampledFrame->ch_layout);
++      av_channel_layout_copy(&m_resampledFrame->ch_layout, &m_codecCtx->ch_layout);
++#else
+       m_resampledFrame->channel_layout = m_codecCtx->channel_layout;
++#endif
+       m_resampledFrame->sample_rate = m_codecCtx->sample_rate;
+ 
+       err = av_frame_get_buffer(m_resampledFrame, 0);
+@@ -203,11 +230,23 @@ bool CEncoderFFmpeg::Init()
+     CLog::Log(LOGERROR, "CEncoderFFmpeg::{} - {}", __func__, caught.what());
+ 
+     av_freep(&m_buffer);
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++    av_channel_layout_uninit(&m_bufferFrame->ch_layout);
++#endif
+     av_frame_free(&m_bufferFrame);
+     swr_free(&m_swrCtx);
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++    av_channel_layout_uninit(&m_resampledFrame->ch_layout);
++#endif
+     av_frame_free(&m_resampledFrame);
+     av_freep(&m_resampledBuffer);
+     av_free(m_bcBuffer);
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++    av_channel_layout_uninit(&m_codecCtx->ch_layout);
++#endif
+     avcodec_free_context(&m_codecCtx);
+     if (m_formatCtx)
+     {
+@@ -352,8 +391,16 @@ bool CEncoderFFmpeg::Close()
+ 
+     /* Flush if needed */
+     av_freep(&m_buffer);
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++    av_channel_layout_uninit(&m_bufferFrame->ch_layout);
++#endif
+     av_frame_free(&m_bufferFrame);
+     swr_free(&m_swrCtx);
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++    av_channel_layout_uninit(&m_resampledFrame->ch_layout);
++#endif
+     av_frame_free(&m_resampledFrame);
+     av_freep(&m_resampledBuffer);
+     m_needConversion = false;
+@@ -365,6 +412,10 @@ bool CEncoderFFmpeg::Close()
+ 
+     /* cleanup */
+     av_free(m_bcBuffer);
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++    av_channel_layout_uninit(&m_codecCtx->ch_layout);
++#endif
+     avcodec_free_context(&m_codecCtx);
+     av_freep(&m_formatCtx->pb);
+     avformat_free_context(m_formatCtx);
+diff --git a/xbmc/cores/AudioEngine/Encoders/AEEncoderFFmpeg.cpp b/xbmc/cores/AudioEngine/Encoders/AEEncoderFFmpeg.cpp
+index cff9222293..01cd9bd256 100644
+--- a/xbmc/cores/AudioEngine/Encoders/AEEncoderFFmpeg.cpp
++++ b/xbmc/cores/AudioEngine/Encoders/AEEncoderFFmpeg.cpp
+@@ -37,6 +37,10 @@ CAEEncoderFFmpeg::~CAEEncoderFFmpeg()
+ {
+   Reset();
+   swr_free(&m_SwrCtx);
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++  av_channel_layout_uninit(&m_CodecCtx->ch_layout);
++#endif
+   avcodec_free_context(&m_CodecCtx);
+ }
+ 
+@@ -113,7 +117,13 @@ bool CAEEncoderFFmpeg::Initialize(AEAudioFormat &format, bool allow_planar_input
+ 
+   m_CodecCtx->bit_rate = m_BitRate;
+   m_CodecCtx->sample_rate = format.m_sampleRate;
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++  av_channel_layout_uninit(&m_CodecCtx->ch_layout);
++  av_channel_layout_from_mask(&m_CodecCtx->ch_layout, AV_CH_LAYOUT_5POINT1_BACK);
++#else
+   m_CodecCtx->channel_layout = AV_CH_LAYOUT_5POINT1_BACK;
++#endif
+ 
+   /* select a suitable data format */
+   if (codec->sample_fmts)
+@@ -190,22 +200,44 @@ bool CAEEncoderFFmpeg::Initialize(AEAudioFormat &format, bool allow_planar_input
+           LOGERROR,
+           "CAEEncoderFFmpeg::Initialize - Unable to find a suitable data format for the codec ({})",
+           m_CodecName);
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++      av_channel_layout_uninit(&m_CodecCtx->ch_layout);
++#endif
+       avcodec_free_context(&m_CodecCtx);
+       return false;
+     }
+   }
+ 
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++  uint64_t mask = m_CodecCtx->ch_layout.u.mask;
++  av_channel_layout_uninit(&m_CodecCtx->ch_layout);
++  av_channel_layout_from_mask(&m_CodecCtx->ch_layout, mask);
++  m_CodecCtx->ch_layout.nb_channels = BuildChannelLayout(mask, m_Layout);
++#else
+   m_CodecCtx->channels = BuildChannelLayout(m_CodecCtx->channel_layout, m_Layout);
++#endif
+ 
+   /* open the codec */
+   if (avcodec_open2(m_CodecCtx, codec, NULL))
+   {
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++    av_channel_layout_uninit(&m_CodecCtx->ch_layout);
++#endif
+     avcodec_free_context(&m_CodecCtx);
+     return false;
+   }
+ 
+   format.m_frames = m_CodecCtx->frame_size;
+-  format.m_frameSize = m_CodecCtx->channels * (CAEUtil::DataFormatToBits(format.m_dataFormat) >> 3);
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++  int channels = m_CodecCtx->ch_layout.nb_channels;
++#else
++  int channels = m_CodecCtx->channels;
++#endif
++  format.m_frameSize = channels * (CAEUtil::DataFormatToBits(format.m_dataFormat) >> 3);
+   format.m_channelLayout = m_Layout;
+ 
+   m_CurrentFormat = format;
+@@ -215,14 +247,26 @@ bool CAEEncoderFFmpeg::Initialize(AEAudioFormat &format, bool allow_planar_input
+ 
+   if (m_NeedConversion)
+   {
++#if LIBSWRESAMPLE_BUILD >= AV_VERSION_INT(4, 7, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++    int ret = swr_alloc_set_opts2(&m_SwrCtx, &m_CodecCtx->ch_layout, m_CodecCtx->sample_fmt,
++                                  m_CodecCtx->sample_rate, &m_CodecCtx->ch_layout,
++                                  AV_SAMPLE_FMT_FLT, m_CodecCtx->sample_rate, 0, NULL);
++    if (ret || swr_init(m_SwrCtx) < 0)
++#else
+     m_SwrCtx = swr_alloc_set_opts(NULL,
+                       m_CodecCtx->channel_layout, m_CodecCtx->sample_fmt, m_CodecCtx->sample_rate,
+                       m_CodecCtx->channel_layout, AV_SAMPLE_FMT_FLT, m_CodecCtx->sample_rate,
+                       0, NULL);
+     if (!m_SwrCtx || swr_init(m_SwrCtx) < 0)
++#endif
+     {
+       CLog::Log(LOGERROR, "CAEEncoderFFmpeg::Initialize - Failed to initialise resampler.");
+       swr_free(&m_SwrCtx);
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++      av_channel_layout_uninit(&m_CodecCtx->ch_layout);
++#endif
+       avcodec_free_context(&m_CodecCtx);
+       return false;
+     }
+@@ -276,10 +320,18 @@ int CAEEncoderFFmpeg::Encode(uint8_t *in, int in_size, uint8_t *out, int out_siz
+ 
+     frame->nb_samples = m_CodecCtx->frame_size;
+     frame->format = m_CodecCtx->sample_fmt;
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++    av_channel_layout_uninit(&frame->ch_layout);
++    av_channel_layout_copy(&frame->ch_layout, &m_CodecCtx->ch_layout);
++    int channelNum = m_CodecCtx->ch_layout.nb_channels;
++#else
+     frame->channel_layout = m_CodecCtx->channel_layout;
+     frame->channels = m_CodecCtx->channels;
++    int channelNum = m_CodecCtx->channels;
++#endif
+ 
+-    avcodec_fill_audio_frame(frame, m_CodecCtx->channels, m_CodecCtx->sample_fmt, in, in_size, 0);
++    avcodec_fill_audio_frame(frame, channelNum, m_CodecCtx->sample_fmt, in, in_size, 0);
+ 
+     pkt->size = out_size;
+     pkt->data = out;
+@@ -295,6 +347,10 @@ int CAEEncoderFFmpeg::Encode(uint8_t *in, int in_size, uint8_t *out, int out_siz
+       err = avcodec_receive_packet(m_CodecCtx, pkt);
+       if (err == AVERROR(EAGAIN) || err == AVERROR_EOF)
+       {
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++        av_channel_layout_uninit(&frame->ch_layout);
++#endif
+         av_frame_free(&frame);
+         av_packet_free(&pkt);
+         return (err == AVERROR(EAGAIN)) ? -1 : 0;
+diff --git a/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAE.cpp b/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAE.cpp
+index 6000fe9c63..9cd3bddda8 100644
+--- a/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAE.cpp
++++ b/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAE.cpp
+@@ -3069,8 +3069,14 @@ IAE::SoundPtr CActiveAE::MakeSound(const std::string& file)
+       AVCodecID codecId = fmt_ctx->streams[0]->codecpar->codec_id;
+       dec = avcodec_find_decoder(codecId);
+       config.sample_rate = fmt_ctx->streams[0]->codecpar->sample_rate;
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++      config.channels = fmt_ctx->streams[0]->codecpar->ch_layout.nb_channels;
++      config.channel_layout = fmt_ctx->streams[0]->codecpar->ch_layout.u.mask;
++#else
+       config.channels = fmt_ctx->streams[0]->codecpar->channels;
+       config.channel_layout = fmt_ctx->streams[0]->codecpar->channel_layout;
++#endif
+     }
+   }
+   if (dec == nullptr)
+@@ -3086,10 +3092,22 @@ IAE::SoundPtr CActiveAE::MakeSound(const std::string& file)
+ 
+   dec_ctx = avcodec_alloc_context3(dec);
+   dec_ctx->sample_rate = config.sample_rate;
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++  AVChannelLayout layout = {};
++  if (!config.channel_layout)
++    av_channel_layout_default(&layout, config.channels);
++  else
++    av_channel_layout_from_mask(&layout, config.channel_layout);
++  config.channel_layout = layout.u.mask;
++  av_channel_layout_copy(&dec_ctx->ch_layout, &layout);
++  av_channel_layout_uninit(&layout);
++#else
+   dec_ctx->channels = config.channels;
+   if (!config.channel_layout)
+     config.channel_layout = av_get_default_channel_layout(config.channels);
+   dec_ctx->channel_layout = config.channel_layout;
++#endif
+ 
+   AVPacket* avpkt = av_packet_alloc();
+   if (!avpkt)
+@@ -3156,6 +3174,10 @@ IAE::SoundPtr CActiveAE::MakeSound(const std::string& file)
+ 
+   av_packet_free(&avpkt);
+   av_frame_free(&decoded_frame);
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++  av_channel_layout_uninit(&dec_ctx->ch_layout);
++#endif
+   avcodec_free_context(&dec_ctx);
+   avformat_close_input(&fmt_ctx);
+   if (io_ctx)
+diff --git a/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAEFilter.cpp b/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAEFilter.cpp
+index 26b669a2cf..1d79dc6db4 100644
+--- a/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAEFilter.cpp
++++ b/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAEFilter.cpp
+@@ -12,10 +12,11 @@
+ #include <algorithm>
+ 
+ extern "C" {
+-#include <libavfilter/avfilter.h>
+ #include <libavcodec/avcodec.h>
++#include <libavfilter/avfilter.h>
+ #include <libavfilter/buffersink.h>
+ #include <libavfilter/buffersrc.h>
++#include <libavutil/version.h>
+ #include <libswresample/swresample.h>
+ }
+ 
+@@ -171,7 +172,13 @@ void CActiveAEFilter::CloseFilter()
+   }
+ 
+   if (m_pOutFrame)
++  {
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++    av_channel_layout_uninit(&m_pOutFrame->ch_layout);
++#endif
+     av_frame_free(&m_pOutFrame);
++  }
+ 
+   if (m_pConvertFrame)
+     av_frame_free(&m_pConvertFrame);
+@@ -205,10 +212,17 @@ int CActiveAEFilter::ProcessFilter(uint8_t **dst_buffer, int dst_samples, uint8_
+     if (!frame)
+       return -1;
+ 
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++    av_channel_layout_uninit(&frame->ch_layout);
++    av_channel_layout_from_mask(&frame->ch_layout, m_channelLayout);
++    int channels = frame->ch_layout.nb_channels;
++#else
+     int channels = av_get_channel_layout_nb_channels(m_channelLayout);
+ 
+     frame->channel_layout = m_channelLayout;
+     frame->channels = channels;
++#endif
+     frame->sample_rate = m_sampleRate;
+     frame->nb_samples = src_samples;
+     frame->format = m_sampleFormat;
+@@ -224,6 +238,10 @@ int CActiveAEFilter::ProcessFilter(uint8_t **dst_buffer, int dst_samples, uint8_
+                              src_buffer[0], src_bufsize, 16);
+     if (result < 0)
+     {
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++      av_channel_layout_uninit(&frame->ch_layout);
++#endif
+       av_frame_free(&frame);
+       CLog::Log(LOGERROR, "CActiveAEFilter::ProcessFilter - avcodec_fill_audio_frame failed");
+       m_filterEof = true;
+@@ -231,6 +249,10 @@ int CActiveAEFilter::ProcessFilter(uint8_t **dst_buffer, int dst_samples, uint8_
+     }
+ 
+     result = av_buffersrc_write_frame(m_pFilterCtxIn, frame);
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++    av_channel_layout_uninit(&frame->ch_layout);
++#endif
+     av_frame_free(&frame);
+     if (result < 0)
+     {
+@@ -284,7 +306,13 @@ int CActiveAEFilter::ProcessFilter(uint8_t **dst_buffer, int dst_samples, uint8_
+     {
+       av_frame_unref(m_pOutFrame);
+       m_pOutFrame->format = m_sampleFormat;
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++      av_channel_layout_uninit(&m_pOutFrame->ch_layout);
++      av_channel_layout_from_mask(&m_pOutFrame->ch_layout, m_channelLayout);
++#else
+       m_pOutFrame->channel_layout = m_channelLayout;
++#endif
+       m_pOutFrame->sample_rate = m_sampleRate;
+       result = swr_convert_frame(m_pConvertCtx, m_pOutFrame, m_pConvertFrame);
+       av_frame_unref(m_pConvertFrame);
+@@ -302,7 +330,15 @@ int CActiveAEFilter::ProcessFilter(uint8_t **dst_buffer, int dst_samples, uint8_
+ 
+   if (m_hasData)
+   {
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++    AVChannelLayout layout = {};
++    av_channel_layout_from_mask(&layout, m_channelLayout);
++    int channels = layout.nb_channels;
++    av_channel_layout_uninit(&layout);
++#else
+     int channels = av_get_channel_layout_nb_channels(m_channelLayout);
++#endif
+     int planes = av_sample_fmt_is_planar(m_sampleFormat) ? channels : 1;
+     int samples = std::min(dst_samples, m_pOutFrame->nb_samples - m_sampleOffset);
+     int bytes = samples * av_get_bytes_per_sample(m_sampleFormat) * channels / planes;
+diff --git a/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAEResampleFFMPEG.cpp b/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAEResampleFFMPEG.cpp
+index bfef837114..379dfe6446 100644
+--- a/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAEResampleFFMPEG.cpp
++++ b/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAEResampleFFMPEG.cpp
+@@ -11,8 +11,10 @@
+ #include "utils/log.h"
+ 
+ extern "C" {
++#include <libavcodec/version.h>
+ #include <libavutil/channel_layout.h>
+ #include <libavutil/opt.h>
++#include <libavutil/version.h>
+ #include <libswresample/swresample.h>
+ }
+ 
+@@ -49,15 +51,49 @@ bool CActiveAEResampleFFMPEG::Init(SampleConfig dstConfig, SampleConfig srcConfi
+     m_doesResample = true;
+ 
+   if (m_dst_chan_layout == 0)
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++  {
++    AVChannelLayout layout = {};
++    av_channel_layout_default(&layout, m_dst_channels);
++    m_dst_chan_layout = layout.u.mask;
++    av_channel_layout_uninit(&layout);
++  }
++#else
+     m_dst_chan_layout = av_get_default_channel_layout(m_dst_channels);
++#endif
+   if (m_src_chan_layout == 0)
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++  {
++    AVChannelLayout layout = {};
++    av_channel_layout_default(&layout, m_src_channels);
++    m_src_chan_layout = layout.u.mask;
++    av_channel_layout_uninit(&layout);
++  }
++#else
+     m_src_chan_layout = av_get_default_channel_layout(m_src_channels);
++#endif
++
++#if LIBSWRESAMPLE_BUILD >= AV_VERSION_INT(4, 7, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++  AVChannelLayout dstChLayout = {};
++  AVChannelLayout srcChLayout = {};
+ 
++  av_channel_layout_from_mask(&dstChLayout, m_dst_chan_layout);
++  av_channel_layout_from_mask(&srcChLayout, m_src_chan_layout);
++
++  int ret = swr_alloc_set_opts2(&m_pContext, &dstChLayout, m_dst_fmt, m_dst_rate, &srcChLayout,
++                                m_src_fmt, m_src_rate, 0, NULL);
++
++  if (ret)
++#else
+   m_pContext = swr_alloc_set_opts(NULL, m_dst_chan_layout, m_dst_fmt, m_dst_rate,
+                                                         m_src_chan_layout, m_src_fmt, m_src_rate,
+                                                         0, NULL);
+ 
+   if (!m_pContext)
++#endif
+   {
+     CLog::Log(LOGERROR, "CActiveAEResampleFFMPEG::Init - create context failed");
+     return false;
+@@ -126,10 +162,20 @@ bool CActiveAEResampleFFMPEG::Init(SampleConfig dstConfig, SampleConfig srcConfi
+   else if (upmix && m_src_channels == 2 && m_dst_channels > 2)
+   {
+     memset(m_rematrix, 0, sizeof(m_rematrix));
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++    av_channel_layout_uninit(&dstChLayout);
++    av_channel_layout_from_mask(&dstChLayout, m_dst_chan_layout);
++#endif
+     for (int out=0; out<m_dst_channels; out++)
+     {
+-      uint64_t out_chan = av_channel_layout_extract_channel(m_dst_chan_layout, out);
+-      switch(out_chan)
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++      AVChannel outChan = av_channel_layout_channel_from_index(&dstChLayout, out);
++#else
++      uint64_t outChan = av_channel_layout_extract_channel(m_dst_chan_layout, out);
++#endif
++      switch (outChan)
+       {
+         case AV_CH_FRONT_LEFT:
+         case AV_CH_BACK_LEFT:
+@@ -154,6 +200,11 @@ bool CActiveAEResampleFFMPEG::Init(SampleConfig dstConfig, SampleConfig srcConfi
+       }
+     }
+ 
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++    av_channel_layout_uninit(&dstChLayout);
++#endif
++
+     if (swr_set_matrix(m_pContext, (const double*)m_rematrix, AE_CH_MAX) < 0)
+     {
+       CLog::Log(LOGERROR, "CActiveAEResampleFFMPEG::Init - setting channel matrix failed");
+diff --git a/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAEStream.cpp b/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAEStream.cpp
+index 858b0f2f22..a52ac2829f 100644
+--- a/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAEStream.cpp
++++ b/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAEStream.cpp
+@@ -88,7 +88,7 @@ void CActiveAEStream::InitRemapper()
+   for(unsigned int i=0; i<m_format.m_channelLayout.Count(); i++)
+   {
+     avLast = avCur;
+-    avCur = CAEUtil::GetAVChannel(m_format.m_channelLayout[i]);
++    avCur = CAEUtil::GetAVChannelMask(m_format.m_channelLayout[i]);
+     if(avCur < avLast)
+     {
+       needRemap = true;
+diff --git a/xbmc/cores/AudioEngine/Utils/AEUtil.cpp b/xbmc/cores/AudioEngine/Utils/AEUtil.cpp
+index bfa2cf9e4c..98f82816ef 100644
+--- a/xbmc/cores/AudioEngine/Utils/AEUtil.cpp
++++ b/xbmc/cores/AudioEngine/Utils/AEUtil.cpp
+@@ -19,10 +19,6 @@
+ #include <xmmintrin.h>
+ #endif
+ 
+-extern "C" {
+-#include <libavutil/channel_layout.h>
+-}
+-
+ void AEDelayStatus::SetDelay(double d)
+ {
+   delay = d;
+@@ -550,8 +546,15 @@ AVSampleFormat CAEUtil::GetAVSampleFormat(AEDataFormat format)
+   }
+ }
+ 
+-uint64_t CAEUtil::GetAVChannel(enum AEChannel aechannel)
++uint64_t CAEUtil::GetAVChannelMask(enum AEChannel aechannel)
+ {
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++  enum AVChannel ch = GetAVChannel(aechannel);
++  if (ch == AV_CHAN_NONE)
++    return 0;
++  return (1ULL << ch);
++#else
+   switch (aechannel)
+   {
+   case AE_CH_FL:   return AV_CH_FRONT_LEFT;
+@@ -575,9 +578,67 @@ uint64_t CAEUtil::GetAVChannel(enum AEChannel aechannel)
+   default:
+     return 0;
+   }
++#endif
+ }
+ 
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++enum AVChannel CAEUtil::GetAVChannel(enum AEChannel aechannel)
++{
++  switch (aechannel)
++  {
++    case AE_CH_FL:
++      return AV_CHAN_FRONT_LEFT;
++    case AE_CH_FR:
++      return AV_CHAN_FRONT_RIGHT;
++    case AE_CH_FC:
++      return AV_CHAN_FRONT_CENTER;
++    case AE_CH_LFE:
++      return AV_CHAN_LOW_FREQUENCY;
++    case AE_CH_BL:
++      return AV_CHAN_BACK_LEFT;
++    case AE_CH_BR:
++      return AV_CHAN_BACK_RIGHT;
++    case AE_CH_FLOC:
++      return AV_CHAN_FRONT_LEFT_OF_CENTER;
++    case AE_CH_FROC:
++      return AV_CHAN_FRONT_RIGHT_OF_CENTER;
++    case AE_CH_BC:
++      return AV_CHAN_BACK_CENTER;
++    case AE_CH_SL:
++      return AV_CHAN_SIDE_LEFT;
++    case AE_CH_SR:
++      return AV_CHAN_SIDE_RIGHT;
++    case AE_CH_TC:
++      return AV_CHAN_TOP_CENTER;
++    case AE_CH_TFL:
++      return AV_CHAN_TOP_FRONT_LEFT;
++    case AE_CH_TFC:
++      return AV_CHAN_TOP_FRONT_CENTER;
++    case AE_CH_TFR:
++      return AV_CHAN_TOP_FRONT_RIGHT;
++    case AE_CH_TBL:
++      return AV_CHAN_TOP_BACK_LEFT;
++    case AE_CH_TBC:
++      return AV_CHAN_TOP_BACK_CENTER;
++    case AE_CH_TBR:
++      return AV_CHAN_TOP_BACK_RIGHT;
++    default:
++      return AV_CHAN_NONE;
++  }
++}
++#endif
++
+ int CAEUtil::GetAVChannelIndex(enum AEChannel aechannel, uint64_t layout)
+ {
+-  return av_get_channel_layout_channel_index(layout, GetAVChannel(aechannel));
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++  AVChannelLayout ch_layout = {};
++  av_channel_layout_from_mask(&ch_layout, layout);
++  int idx = av_channel_layout_index_from_channel(&ch_layout, GetAVChannel(aechannel));
++  av_channel_layout_uninit(&ch_layout);
++  return idx;
++#else
++  return av_get_channel_layout_channel_index(layout, GetAVChannelMask(aechannel));
++#endif
+ }
+diff --git a/xbmc/cores/AudioEngine/Utils/AEUtil.h b/xbmc/cores/AudioEngine/Utils/AEUtil.h
+index 034e115ee8..8acbeec442 100644
+--- a/xbmc/cores/AudioEngine/Utils/AEUtil.h
++++ b/xbmc/cores/AudioEngine/Utils/AEUtil.h
+@@ -13,7 +13,10 @@
+ #include <math.h>
+ 
+ extern "C" {
++#include <libavcodec/version.h>
++#include <libavutil/channel_layout.h>
+ #include <libavutil/samplefmt.h>
++#include <libavutil/version.h>
+ }
+ 
+ // AV sync options
+@@ -171,6 +174,10 @@ public:
+   static uint64_t GetAVChannelLayout(const CAEChannelInfo &info);
+   static CAEChannelInfo GetAEChannelLayout(uint64_t layout);
+   static AVSampleFormat GetAVSampleFormat(AEDataFormat format);
+-  static uint64_t GetAVChannel(enum AEChannel aechannel);
++  static uint64_t GetAVChannelMask(enum AEChannel aechannel);
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++  static enum AVChannel GetAVChannel(enum AEChannel aechannel);
++#endif
+   static int GetAVChannelIndex(enum AEChannel aechannel, uint64_t layout);
+ };
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Audio/DVDAudioCodecFFmpeg.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Audio/DVDAudioCodecFFmpeg.cpp
+index 87e7ae2c57..44dcb32620 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Audio/DVDAudioCodecFFmpeg.cpp
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Audio/DVDAudioCodecFFmpeg.cpp
+@@ -78,7 +78,14 @@ bool CDVDAudioCodecFFmpeg::Open(CDVDStreamInfo &hints, CDVDCodecOptions &options
+ 
+   m_matrixEncoding = AV_MATRIX_ENCODING_NONE;
+   m_channels = 0;
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++  av_channel_layout_uninit(&m_pCodecContext->ch_layout);
++  m_pCodecContext->ch_layout.order = AV_CHANNEL_ORDER_NATIVE;
++  m_pCodecContext->ch_layout.nb_channels = hints.channels;
++#else
+   m_pCodecContext->channels = hints.channels;
++#endif
+   m_hint_layout = hints.channellayout;
+   m_pCodecContext->sample_rate = hints.samplerate;
+   m_pCodecContext->block_align = hints.blockalign;
+@@ -261,12 +268,18 @@ int CDVDAudioCodecFFmpeg::GetData(uint8_t** dst)
+     m_format.m_frameSize = m_format.m_channelLayout.Count() *
+                            CAEUtil::DataFormatToBits(m_format.m_dataFormat) >> 3;
+ 
+-    int planes = av_sample_fmt_is_planar(m_pCodecContext->sample_fmt) ? m_pFrame->channels : 1;
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++    int channels = m_pFrame->ch_layout.nb_channels;
++#else
++    int channels = m_pFrame->channels;
++#endif
++    int planes = av_sample_fmt_is_planar(m_pCodecContext->sample_fmt) ? channels : 1;
++
+     for (int i=0; i<planes; i++)
+       dst[i] = m_pFrame->extended_data[i];
+ 
+-    return m_pFrame->nb_samples * m_pFrame->channels *
+-           av_get_bytes_per_sample(m_pCodecContext->sample_fmt);
++    return m_pFrame->nb_samples * channels * av_get_bytes_per_sample(m_pCodecContext->sample_fmt);
+   }
+ 
+   return 0;
+@@ -280,7 +293,12 @@ void CDVDAudioCodecFFmpeg::Reset()
+ 
+ int CDVDAudioCodecFFmpeg::GetChannels()
+ {
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++  return m_pCodecContext->ch_layout.nb_channels;
++#else
+   return m_pCodecContext->channels;
++#endif
+ }
+ 
+ int CDVDAudioCodecFFmpeg::GetSampleRate()
+@@ -347,28 +365,44 @@ static unsigned count_bits(int64_t value)
+ 
+ void CDVDAudioCodecFFmpeg::BuildChannelMap()
+ {
+-  if (m_channels == m_pCodecContext->channels && m_layout == m_pCodecContext->channel_layout)
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++  int codecChannels = m_pCodecContext->ch_layout.nb_channels;
++  uint64_t codecChannelLayout = m_pCodecContext->ch_layout.u.mask;
++#else
++  int codecChannels = m_pCodecContext->channels;
++  uint64_t codecChannelLayout = m_pCodecContext->channel_layout;
++#endif
++  if (m_channels == codecChannels && m_layout == codecChannelLayout)
+     return; //nothing to do here
+ 
+-  m_channels = m_pCodecContext->channels;
+-  m_layout   = m_pCodecContext->channel_layout;
++  m_channels = codecChannels;
++  m_layout = codecChannelLayout;
+ 
+   int64_t layout;
+ 
+-  int bits = count_bits(m_pCodecContext->channel_layout);
+-  if (bits == m_pCodecContext->channels)
+-    layout = m_pCodecContext->channel_layout;
++  int bits = count_bits(codecChannelLayout);
++  if (bits == codecChannels)
++    layout = codecChannelLayout;
+   else
+   {
+     CLog::Log(LOGINFO,
+               "CDVDAudioCodecFFmpeg::GetChannelMap - FFmpeg reported {} channels, but the layout "
+               "contains {} - trying hints",
+-              m_pCodecContext->channels, bits);
+-    if (static_cast<int>(count_bits(m_hint_layout)) == m_pCodecContext->channels)
++              codecChannels, bits);
++    if (static_cast<int>(count_bits(m_hint_layout)) == codecChannels)
+       layout = m_hint_layout;
+     else
+     {
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++      AVChannelLayout def_layout = {};
++      av_channel_layout_default(&def_layout, codecChannels);
++      layout = def_layout.u.mask;
++      av_channel_layout_uninit(&def_layout);
++#else
+       layout = av_get_default_channel_layout(m_pCodecContext->channels);
++#endif
+       CLog::Log(LOGINFO, "Using default layout...");
+     }
+   }
+@@ -394,7 +428,7 @@ void CDVDAudioCodecFFmpeg::BuildChannelMap()
+   if (layout & AV_CH_TOP_BACK_CENTER      ) m_channelLayout += AE_CH_BC  ;
+   if (layout & AV_CH_TOP_BACK_RIGHT       ) m_channelLayout += AE_CH_BR  ;
+ 
+-  m_channels = m_pCodecContext->channels;
++  m_channels = codecChannels;
+ }
+ 
+ CAEChannelInfo CDVDAudioCodecFFmpeg::GetChannelMap()
+diff --git a/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxClient.cpp b/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxClient.cpp
+index 8b9f53bdd7..02fca443e7 100644
+--- a/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxClient.cpp
++++ b/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxClient.cpp
+@@ -222,10 +222,17 @@ bool CDVDDemuxClient::ParsePacket(DemuxPacket* pkt)
+       case STREAM_AUDIO:
+       {
+         CDemuxStreamClientInternalTpl<CDemuxStreamAudio>* sta = static_cast<CDemuxStreamClientInternalTpl<CDemuxStreamAudio>*>(st);
+-        if (stream->m_context->channels != sta->iChannels && stream->m_context->channels != 0)
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++        int streamChannels = stream->m_context->ch_layout.nb_channels;
++#else
++        int streamChannels = stream->m_context->channels;
++#endif
++        if (streamChannels != sta->iChannels && streamChannels != 0)
+         {
+-          CLog::Log(LOGDEBUG, "CDVDDemuxClient::ParsePacket - ({}) channels changed from {} to {}", st->uniqueId, sta->iChannels, stream->m_context->channels);
+-          sta->iChannels = stream->m_context->channels;
++          CLog::Log(LOGDEBUG, "CDVDDemuxClient::ParsePacket - ({}) channels changed from {} to {}",
++                    st->uniqueId, sta->iChannels, streamChannels);
++          sta->iChannels = streamChannels;
+           sta->changes++;
+           sta->disabled = false;
+         }
+@@ -237,7 +244,7 @@ bool CDVDDemuxClient::ParsePacket(DemuxPacket* pkt)
+           sta->changes++;
+           sta->disabled = false;
+         }
+-        if (stream->m_context->channels)
++        if (streamChannels)
+           st->changes = -1; // stop parsing
+         break;
+       }
+diff --git a/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxFFmpeg.cpp b/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxFFmpeg.cpp
+index 27fb3e4fc0..244d23592d 100644
+--- a/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxFFmpeg.cpp
++++ b/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxFFmpeg.cpp
+@@ -1235,8 +1235,16 @@ DemuxPacket* CDVDDemuxFFmpeg::Read()
+     else if (stream->type == STREAM_AUDIO)
+     {
+       CDemuxStreamAudioFFmpeg* audiostream = dynamic_cast<CDemuxStreamAudioFFmpeg*>(stream);
+-      if (audiostream && (audiostream->iChannels != m_pFormatContext->streams[pPacket->iStreamId]->codecpar->channels ||
+-          audiostream->iSampleRate != m_pFormatContext->streams[pPacket->iStreamId]->codecpar->sample_rate))
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++      int codecparChannels =
++          m_pFormatContext->streams[pPacket->iStreamId]->codecpar->ch_layout.nb_channels;
++#else
++      int codecparChannels = m_pFormatContext->streams[pPacket->iStreamId]->codecpar->channels;
++#endif
++      if (audiostream && (audiostream->iChannels != codecparChannels ||
++                          audiostream->iSampleRate !=
++                              m_pFormatContext->streams[pPacket->iStreamId]->codecpar->sample_rate))
+       {
+         // content has changed
+         stream = AddStream(pPacket->iStreamId);
+@@ -1418,6 +1426,7 @@ void CDVDDemuxFFmpeg::UpdateCurrentPTS()
+   if (idx >= 0)
+   {
+     AVStream* stream = m_pFormatContext->streams[idx];
++
+ #if LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 17, 100)
+     if (stream && m_pkt.pkt.dts != (int64_t)AV_NOPTS_VALUE)
+     {
+@@ -1639,16 +1648,28 @@ CDemuxStream* CDVDDemuxFFmpeg::AddStream(int streamIdx)
+       {
+         CDemuxStreamAudioFFmpeg* st = new CDemuxStreamAudioFFmpeg(pStream);
+         stream = st;
+-        st->iChannels = pStream->codecpar->channels;
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++        int codecparChannels = pStream->codecpar->ch_layout.nb_channels;
++        int codecparChannelLayout = pStream->codecpar->ch_layout.u.mask;
++#else
++        int codecparChannels = pStream->codecpar->channels;
++        int codecparChannelLayout = pStream->codecpar->channel_layout;
++#endif
++        st->iChannels = codecparChannels;
++        st->iChannelLayout = codecparChannelLayout;
+         st->iSampleRate = pStream->codecpar->sample_rate;
+         st->iBlockAlign = pStream->codecpar->block_align;
+         st->iBitRate = static_cast<int>(pStream->codecpar->bit_rate);
+         st->iBitsPerSample = pStream->codecpar->bits_per_raw_sample;
+-        st->iChannelLayout = pStream->codecpar->channel_layout;
+         char buf[32] = {};
+         // https://github.com/FFmpeg/FFmpeg/blob/6ccc3989d15/doc/APIchanges#L50-L53
+-#if LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 24, 100)
+-        av_channel_layout_describe(st->iChannelLayout, buf, sizeof(buf));
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++        AVChannelLayout layout = {};
++        av_channel_layout_from_mask(&layout, st->iChannelLayout);
++        av_channel_layout_describe(&layout, buf, sizeof(buf));
++        av_channel_layout_uninit(&layout);
+ #else
+         av_get_channel_layout_string(buf, 31, st->iChannels, st->iChannelLayout);
+ #endif
+@@ -2194,8 +2215,13 @@ bool CDVDDemuxFFmpeg::IsProgramChange()
+     if (m_pFormatContext->streams[idx]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+     {
+       CDemuxStreamAudioFFmpeg* audiostream = dynamic_cast<CDemuxStreamAudioFFmpeg*>(stream);
+-      if (audiostream &&
+-          m_pFormatContext->streams[idx]->codecpar->channels != audiostream->iChannels)
++#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
++    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
++      int codecparChannels = m_pFormatContext->streams[idx]->codecpar->ch_layout.nb_channels;
++#else
++      int codecparChannels = m_pFormatContext->streams[idx]->codecpar->channels;
++#endif
++      if (audiostream && codecparChannels != audiostream->iChannels)
+       {
+         return true;
+       }
+-- 
+2.38.0
+
+
+From 7125aeb44e00775094f9b52a67d4002bdb585021 Mon Sep 17 00:00:00 2001
+From: Vasyl Gello <vasek.gello@gmail.com>
+Date: Sat, 15 Oct 2022 11:46:52 +0000
+Subject: [PATCH 3/7] ffmpeg5: Get extradata with extract_extradata BSF
+
+Fixes the transport stream playback failures described in
+https://bugs.debian.org/1016925
+
+@Rogo95 made an excellent technical analysis of the root cause
+and reported that to the bug thread.
+
+Later on, James Almer (@jamrial) suggested the solution to use
+extract_extradata bitstream filter to replace the removed split()
+function.
+
+Finally, I adapted the following code snippet:
+https://gist.github.com/moonpfe/f6795d51294d91ee0f82f62ff6985db0
+to Kodi and tested it by playing the affected files in TS format.
+
+@HiassofT form LibreELEC found another edge case decoding HTSP
+streams from pvr.hts. The comparison of log files revealed that
+the split function is also used in DVDDemuxClient.
+
+Signed-off-by: Vasyl Gello <vasek.gello@gmail.com>
+---
+ xbmc/cores/FFmpeg.cpp                         | 154 ++++++++++++++++++
+ xbmc/cores/FFmpeg.h                           |   5 +
+ .../DVDDemuxers/DVDDemuxClient.cpp            |  44 ++---
+ .../DVDDemuxers/DVDDemuxFFmpeg.cpp            |  61 +++----
+ 4 files changed, 208 insertions(+), 56 deletions(-)
+
+diff --git a/xbmc/cores/FFmpeg.cpp b/xbmc/cores/FFmpeg.cpp
+index 697d9ce913..7eaf01aa21 100644
+--- a/xbmc/cores/FFmpeg.cpp
++++ b/xbmc/cores/FFmpeg.cpp
+@@ -16,6 +16,11 @@
+ #include "utils/StringUtils.h"
+ #include "utils/log.h"
+ 
++extern "C"
++{
++#include <libavcodec/bsf.h>
++}
++
+ #include <map>
+ #include <mutex>
+ 
+@@ -129,3 +134,152 @@ void ff_avutil_log(void* ptr, int level, const char* format, va_list va)
+   }
+   buffer.erase(0, start);
+ }
++
++std::tuple<uint8_t*, int> GetPacketExtradata(const AVPacket* pkt,
++                                             const AVCodecParserContext* parserCtx,
++                                             AVCodecContext* codecCtx)
++{
++  constexpr int FF_MAX_EXTRADATA_SIZE = ((1 << 28) - AV_INPUT_BUFFER_PADDING_SIZE);
++
++  if (!pkt)
++    return std::make_tuple(nullptr, 0);
++
++  uint8_t* extraData = nullptr;
++  int extraDataSize = 0;
++
++#if LIBAVFORMAT_BUILD >= AV_VERSION_INT(59, 0, 100)
++  /* extract_extradata bitstream filter is implemented only
++   * for certain codecs, as noted in discussion of PR#21248
++   */
++
++  AVCodecID codecId = codecCtx->codec_id;
++
++  // clang-format off
++  if (
++    codecId != AV_CODEC_ID_MPEG1VIDEO &&
++    codecId != AV_CODEC_ID_MPEG2VIDEO &&
++    codecId != AV_CODEC_ID_H264 &&
++    codecId != AV_CODEC_ID_HEVC &&
++    codecId != AV_CODEC_ID_MPEG4 &&
++    codecId != AV_CODEC_ID_VC1 &&
++    codecId != AV_CODEC_ID_AV1 &&
++    codecId != AV_CODEC_ID_AVS2 &&
++    codecId != AV_CODEC_ID_AVS3 &&
++    codecId != AV_CODEC_ID_CAVS
++  )
++    // clang-format on
++    return std::make_tuple(nullptr, 0);
++
++  const AVBitStreamFilter* f = av_bsf_get_by_name("extract_extradata");
++  if (!f)
++    return std::make_tuple(nullptr, 0);
++
++  AVBSFContext* bsf = nullptr;
++  int ret = av_bsf_alloc(f, &bsf);
++  if (ret < 0)
++    return std::make_tuple(nullptr, 0);
++
++  bsf->par_in->codec_id = codecId;
++
++  ret = av_bsf_init(bsf);
++  if (ret < 0)
++  {
++    av_bsf_free(&bsf);
++    return std::make_tuple(nullptr, 0);
++  }
++
++  AVPacket* dstPkt = av_packet_alloc();
++  if (!dstPkt)
++  {
++    CLog::LogF(LOGERROR, "failed to allocate packet");
++
++    av_bsf_free(&bsf);
++    return std::make_tuple(nullptr, 0);
++  }
++  AVPacket* pktRef = dstPkt;
++
++  ret = av_packet_ref(pktRef, pkt);
++  if (ret < 0)
++  {
++    av_bsf_free(&bsf);
++    av_packet_free(&dstPkt);
++    return std::make_tuple(nullptr, 0);
++  }
++
++  ret = av_bsf_send_packet(bsf, pktRef);
++  if (ret < 0)
++  {
++    av_packet_unref(pktRef);
++    av_bsf_free(&bsf);
++    av_packet_free(&dstPkt);
++    return std::make_tuple(nullptr, 0);
++  }
++
++  ret = 0;
++  while (ret >= 0)
++  {
++    ret = av_bsf_receive_packet(bsf, pktRef);
++    if (ret < 0)
++    {
++      if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF)
++        break;
++
++      continue;
++    }
++
++    size_t retExtraDataSize = 0;
++    uint8_t* retExtraData =
++        av_packet_get_side_data(pktRef, AV_PKT_DATA_NEW_EXTRADATA, &retExtraDataSize);
++    if (retExtraData && retExtraDataSize > 0 && retExtraDataSize < FF_MAX_EXTRADATA_SIZE)
++    {
++      extraData = (uint8_t*)av_malloc(retExtraDataSize + AV_INPUT_BUFFER_PADDING_SIZE);
++      if (!extraData)
++      {
++        CLog::LogF(LOGERROR, "failed to allocate {} bytes for extradata", retExtraDataSize);
++
++        av_packet_unref(pktRef);
++        av_bsf_free(&bsf);
++        av_packet_free(&dstPkt);
++        return std::make_tuple(nullptr, 0);
++      }
++
++      CLog::LogF(LOGDEBUG, "fetching extradata, extradata_size({})", retExtraDataSize);
++
++      memcpy(extraData, retExtraData, retExtraDataSize);
++      memset(extraData + retExtraDataSize, 0, AV_INPUT_BUFFER_PADDING_SIZE);
++      extraDataSize = retExtraDataSize;
++
++      av_packet_unref(pktRef);
++      break;
++    }
++
++    av_packet_unref(pktRef);
++  }
++
++  av_bsf_free(&bsf);
++  av_packet_free(&dstPkt);
++#else
++  if (codecCtx && parserCtx && parserCtx->parser && parserCtx->parser->split)
++    extraDataSize = parserCtx->parser->split(codecCtx, pkt->data, pkt->size);
++
++  if (extraDataSize <= 0 || extraDataSize >= FF_MAX_EXTRADATA_SIZE)
++  {
++    CLog::LogF(LOGDEBUG, "fetched extradata of weird size {}", extraDataSize);
++    return std::make_tuple(nullptr, 0);
++  }
++
++  extraData = (uint8_t*)av_malloc(extraDataSize + AV_INPUT_BUFFER_PADDING_SIZE);
++  if (!extraData)
++  {
++    CLog::LogF(LOGERROR, "failed to allocate {} bytes for extradata", extraDataSize);
++    return std::make_tuple(nullptr, 0);
++  }
++
++  CLog::LogF(LOGDEBUG, "fetching extradata, extradata_size({})", extraDataSize);
++
++  memcpy(extraData, pkt->data, extraDataSize);
++  memset(extraData + extraDataSize, 0, AV_INPUT_BUFFER_PADDING_SIZE);
++#endif
++
++  return std::make_tuple(extraData, extraDataSize);
++}
+diff --git a/xbmc/cores/FFmpeg.h b/xbmc/cores/FFmpeg.h
+index 3d4de85fd6..cd1974f9d6 100644
+--- a/xbmc/cores/FFmpeg.h
++++ b/xbmc/cores/FFmpeg.h
+@@ -22,6 +22,8 @@ extern "C" {
+ #include <libpostproc/postprocess.h>
+ }
+ 
++#include <tuple>
++
+ // https://github.com/FFmpeg/FFmpeg/blob/56450a0ee4/doc/APIchanges#L18-L26
+ #if LIBAVFORMAT_BUILD >= AV_VERSION_INT(59, 0, 100)
+ #define FFMPEG_FMT_CONST const
+@@ -78,3 +80,6 @@ public:
+   int level;
+ };
+ 
++std::tuple<uint8_t*, int> GetPacketExtradata(const AVPacket* pkt,
++                                             const AVCodecParserContext* parserCtx,
++                                             AVCodecContext* codecCtx);
+diff --git a/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxClient.cpp b/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxClient.cpp
+index 02fca443e7..c7850ed34b 100644
+--- a/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxClient.cpp
++++ b/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxClient.cpp
+@@ -14,10 +14,9 @@
+ #include "cores/VideoPlayer/Interface/TimingConstants.h"
+ #include "utils/log.h"
+ 
++#include <tuple>
+ #include <utility>
+ 
+-#define FF_MAX_EXTRADATA_SIZE ((1 << 28) - AV_INPUT_BUFFER_PADDING_SIZE)
+-
+ class CDemuxStreamClientInternal
+ {
+ public:
+@@ -150,19 +149,31 @@ bool CDVDDemuxClient::ParsePacket(DemuxPacket* pkt)
+     stream->m_context->time_base.den = DVD_TIME_BASE;
+   }
+ 
+-  if (stream->m_parser_split && stream->m_parser->parser->split)
++  if (stream->m_parser_split && stream->m_parser && stream->m_parser->parser)
+   {
+-    int len = stream->m_parser->parser->split(stream->m_context, pkt->pData, pkt->iSize);
+-    if (len > 0 && len < FF_MAX_EXTRADATA_SIZE)
++    uint8_t* oldExtraData = st->ExtraData;
++
++    AVPacket* avpkt = av_packet_alloc();
++    if (!avpkt)
++    {
++      CLog::LogF(LOGERROR, "CDVDDemuxClient::{} - av_packet_alloc failed: {}", __FUNCTION__,
++                 strerror(errno));
++      return false;
++    }
++
++    avpkt->data = pkt->pData;
++    avpkt->size = pkt->iSize;
++    avpkt->dts = avpkt->pts = AV_NOPTS_VALUE;
++
++    auto [retExtraData, len] = GetPacketExtradata(avpkt, stream->m_parser, stream->m_context);
++    if (len > 0)
+     {
+-      if (st->ExtraData)
+-        delete[] st->ExtraData;
++      if (oldExtraData)
++        av_free(oldExtraData);
+       st->changes++;
+       st->disabled = false;
+       st->ExtraSize = len;
+-      st->ExtraData = new uint8_t[len+AV_INPUT_BUFFER_PADDING_SIZE];
+-      memcpy(st->ExtraData, pkt->pData, len);
+-      memset(st->ExtraData + len, 0 , AV_INPUT_BUFFER_PADDING_SIZE);
++      st->ExtraData = retExtraData;
+       stream->m_parser_split = false;
+       change = true;
+       CLog::Log(LOGDEBUG, "CDVDDemuxClient::ParsePacket - split extradata");
+@@ -170,21 +181,12 @@ bool CDVDDemuxClient::ParsePacket(DemuxPacket* pkt)
+       // Allow ffmpeg to transport codec information to stream->m_context
+       if (!avcodec_open2(stream->m_context, stream->m_context->codec, nullptr))
+       {
+-        AVPacket* avpkt = av_packet_alloc();
+-        if (!avpkt)
+-        {
+-          CLog::Log(LOGERROR, "CDVDDemuxClient::{} - av_packet_alloc failed: {}", __FUNCTION__,
+-                    strerror(errno));
+-          return false;
+-        }
+-        avpkt->data = pkt->pData;
+-        avpkt->size = pkt->iSize;
+-        avpkt->dts = avpkt->pts = AV_NOPTS_VALUE;
+         avcodec_send_packet(stream->m_context, avpkt);
+         avcodec_close(stream->m_context);
+-        av_packet_free(&avpkt);
+       }
+     }
++
++    av_packet_free(&avpkt);
+   }
+ 
+   uint8_t *outbuf = nullptr;
+diff --git a/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxFFmpeg.cpp b/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxFFmpeg.cpp
+index 244d23592d..fbb3e155b9 100644
+--- a/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxFFmpeg.cpp
++++ b/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxFFmpeg.cpp
+@@ -34,6 +34,7 @@
+ 
+ #include <mutex>
+ #include <sstream>
++#include <tuple>
+ #include <utility>
+ 
+ extern "C"
+@@ -105,8 +106,6 @@ bool AttachmentIsFont(const AVDictionaryEntry* dict)
+ }
+ } // namespace
+ 
+-#define FF_MAX_EXTRADATA_SIZE ((1 << 28) - AV_INPUT_BUFFER_PADDING_SIZE)
+-
+ std::string CDemuxStreamAudioFFmpeg::GetStreamName()
+ {
+   if (!m_stream)
+@@ -2357,44 +2356,36 @@ void CDVDDemuxFFmpeg::ParsePacket(AVPacket* pkt)
+ 
+     if (parser->second->m_parserCtx &&
+         parser->second->m_parserCtx->parser &&
+-        parser->second->m_parserCtx->parser->split &&
+         !st->codecpar->extradata)
+     {
+-      int i = parser->second->m_parserCtx->parser->split(parser->second->m_codecCtx, pkt->data, pkt->size);
+-      if (i > 0 && i < FF_MAX_EXTRADATA_SIZE)
++      auto [retExtraData, i] =
++          GetPacketExtradata(pkt, parser->second->m_parserCtx, parser->second->m_codecCtx);
++      if (i > 0)
+       {
+-        st->codecpar->extradata = (uint8_t*)av_malloc(i + AV_INPUT_BUFFER_PADDING_SIZE);
+-        if (st->codecpar->extradata)
+-        {
+-          CLog::Log(LOGDEBUG,
+-                    "CDVDDemuxFFmpeg::ParsePacket() fetching extradata, extradata_size({})", i);
+-          st->codecpar->extradata_size = i;
+-          memcpy(st->codecpar->extradata, pkt->data, i);
+-          memset(st->codecpar->extradata + i, 0, AV_INPUT_BUFFER_PADDING_SIZE);
++        st->codecpar->extradata_size = i;
++        st->codecpar->extradata = retExtraData;
+ 
+-          if (parser->second->m_parserCtx->parser->parser_parse)
++        if (parser->second->m_parserCtx->parser->parser_parse)
++        {
++          parser->second->m_codecCtx->extradata = st->codecpar->extradata;
++          parser->second->m_codecCtx->extradata_size = st->codecpar->extradata_size;
++          const uint8_t* outbufptr;
++          int bufSize;
++          parser->second->m_parserCtx->flags |= PARSER_FLAG_COMPLETE_FRAMES;
++          parser->second->m_parserCtx->parser->parser_parse(parser->second->m_parserCtx,
++                                                            parser->second->m_codecCtx, &outbufptr,
++                                                            &bufSize, pkt->data, pkt->size);
++          parser->second->m_codecCtx->extradata = nullptr;
++          parser->second->m_codecCtx->extradata_size = 0;
++
++          if (parser->second->m_parserCtx->width != 0)
+           {
+-            parser->second->m_codecCtx->extradata = st->codecpar->extradata;
+-            parser->second->m_codecCtx->extradata_size = st->codecpar->extradata_size;
+-            const uint8_t* outbufptr;
+-            int bufSize;
+-            parser->second->m_parserCtx->flags |= PARSER_FLAG_COMPLETE_FRAMES;
+-            parser->second->m_parserCtx->parser->parser_parse(parser->second->m_parserCtx,
+-                                                              parser->second->m_codecCtx,
+-                                                              &outbufptr, &bufSize,
+-                                                              pkt->data, pkt->size);
+-            parser->second->m_codecCtx->extradata = nullptr;
+-            parser->second->m_codecCtx->extradata_size = 0;
+-
+-            if (parser->second->m_parserCtx->width != 0)
+-            {
+-              st->codecpar->width = parser->second->m_parserCtx->width;
+-              st->codecpar->height = parser->second->m_parserCtx->height;
+-            }
+-            else
+-            {
+-              CLog::Log(LOGERROR, "CDVDDemuxFFmpeg::ParsePacket() invalid width/height");
+-            }
++            st->codecpar->width = parser->second->m_parserCtx->width;
++            st->codecpar->height = parser->second->m_parserCtx->height;
++          }
++          else
++          {
++            CLog::Log(LOGERROR, "CDVDDemuxFFmpeg::ParsePacket() invalid width/height");
+           }
+         }
+       }
+-- 
+2.38.0
+
+
+From 3f44b7feb80d96a658401fba3a752a7ae41d8577 Mon Sep 17 00:00:00 2001
+From: Vasyl Gello <vasek.gello@gmail.com>
+Date: Tue, 18 Oct 2022 05:30:30 +0000
+Subject: [PATCH 4/7] Separate commit to remove FFmpeg 4 support
+
+Team Kodi does officially support one major FFmpeg version.
+This commit is intentionally separated to let *nix distro
+maintainers revert it if building Kodi 20+ is needed with
+FFmpeg 4.
+
+Signed-off-by: Vasyl Gello <vasek.gello@gmail.com>
+---
+ cmake/modules/FindFFMPEG.cmake                | 16 ++--
+ xbmc/cdrip/EncoderFFmpeg.cpp                  | 45 +--------
+ .../AudioEngine/Encoders/AEEncoderFFmpeg.cpp  | 48 +---------
+ .../AudioEngine/Engines/ActiveAE/ActiveAE.cpp | 22 +----
+ .../Engines/ActiveAE/ActiveAEFilter.cpp       | 28 ------
+ .../ActiveAE/ActiveAEResampleFFMPEG.cpp       | 32 -------
+ xbmc/cores/AudioEngine/Utils/AEUtil.cpp       | 35 -------
+ xbmc/cores/AudioEngine/Utils/AEUtil.h         |  5 -
+ xbmc/cores/FFmpeg.cpp                         | 23 -----
+ xbmc/cores/FFmpeg.h                           |  7 --
+ .../DVDCodecs/Audio/DVDAudioCodecFFmpeg.cpp   | 28 +-----
+ .../Overlay/DVDOverlayCodecFFmpeg.cpp         |  2 +-
+ .../DVDCodecs/Video/DVDVideoCodecFFmpeg.cpp   | 26 +-----
+ .../DVDCodecs/Video/DVDVideoPPFFmpeg.cpp      |  3 -
+ .../VideoPlayer/DVDCodecs/Video/VAAPI.cpp     |  8 +-
+ .../DVDDemuxers/DVDDemuxClient.cpp            |  7 +-
+ .../DVDDemuxers/DVDDemuxFFmpeg.cpp            | 93 +------------------
+ .../DVDInputStreams/InputStreamAddon.cpp      |  2 +-
+ xbmc/filesystem/AudioBookFileDirectory.cpp    |  2 +-
+ xbmc/guilib/FFmpegImage.cpp                   |  6 +-
+ xbmc/music/tags/MusicInfoTagLoaderFFmpeg.cpp  |  2 +-
+ xbmc/video/tags/VideoTagLoaderFFmpeg.cpp      |  2 +-
+ 22 files changed, 29 insertions(+), 413 deletions(-)
+
+diff --git a/cmake/modules/FindFFMPEG.cmake b/cmake/modules/FindFFMPEG.cmake
+index fedbf0adde..e58b026088 100644
+--- a/cmake/modules/FindFFMPEG.cmake
++++ b/cmake/modules/FindFFMPEG.cmake
+@@ -151,14 +151,14 @@ if(WITH_FFMPEG)
+   set(REQUIRED_FFMPEG_VERSION undef)
+ else()
+   # required ffmpeg library versions
+-  set(REQUIRED_FFMPEG_VERSION 4.4.1)
+-  set(_avcodec_ver ">=58.134.100")
+-  set(_avfilter_ver ">=7.110.100")
+-  set(_avformat_ver ">=58.76.100")
+-  set(_avutil_ver ">=56.70.100")
+-  set(_postproc_ver ">=55.9.100")
+-  set(_swresample_ver ">=3.9.100")
+-  set(_swscale_ver ">=5.9.100")
++  set(REQUIRED_FFMPEG_VERSION 5.0.0)
++  set(_avcodec_ver ">=59.18.100")
++  set(_avfilter_ver ">=8.24.100")
++  set(_avformat_ver ">=59.16.100")
++  set(_avutil_ver ">=57.17.100")
++  set(_postproc_ver ">=56.3.100")
++  set(_swresample_ver ">=4.3.100")
++  set(_swscale_ver ">=6.4.100")
+ endif()
+ 
+ # Allows building with external ffmpeg not found in system paths,
+diff --git a/xbmc/cdrip/EncoderFFmpeg.cpp b/xbmc/cdrip/EncoderFFmpeg.cpp
+index 9f78c5b85d..9df55ccb4d 100644
+--- a/xbmc/cdrip/EncoderFFmpeg.cpp
++++ b/xbmc/cdrip/EncoderFFmpeg.cpp
+@@ -79,7 +79,7 @@ bool CEncoderFFmpeg::Init()
+       throw FFMpegException("Could not allocate url");
+ 
+     /* Find the encoder to be used by its name. */
+-    FFMPEG_FMT_CONST AVCodec* codec = avcodec_find_encoder(m_formatCtx->oformat->audio_codec);
++    const AVCodec* codec = avcodec_find_encoder(m_formatCtx->oformat->audio_codec);
+     if (!codec)
+       throw FFMpegException("Unable to find a suitable FFmpeg encoder");
+ 
+@@ -94,14 +94,8 @@ bool CEncoderFFmpeg::Init()
+ 
+     /* Set the basic encoder parameters.
+      * The input file's sample rate is used to avoid a sample rate conversion. */
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+     av_channel_layout_uninit(&m_codecCtx->ch_layout);
+     av_channel_layout_default(&m_codecCtx->ch_layout, m_iInChannels);
+-#else
+-    m_codecCtx->channels = m_iInChannels;
+-    m_codecCtx->channel_layout = av_get_default_channel_layout(m_iInChannels);
+-#endif
+     m_codecCtx->sample_rate = m_iInSampleRate;
+     m_codecCtx->sample_fmt = codec->sample_fmts[0];
+     m_codecCtx->bit_rate = bitrate;
+@@ -147,13 +141,9 @@ bool CEncoderFFmpeg::Init()
+     m_bufferFrame->nb_samples = m_codecCtx->frame_size;
+     m_bufferFrame->format = m_inFormat;
+ 
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+     av_channel_layout_uninit(&m_bufferFrame->ch_layout);
+     av_channel_layout_copy(&m_bufferFrame->ch_layout, &m_codecCtx->ch_layout);
+-#else
+-    m_bufferFrame->channel_layout = m_codecCtx->channel_layout;
+-#endif
++
+     m_bufferFrame->sample_rate = m_codecCtx->sample_rate;
+ 
+     err = av_frame_get_buffer(m_bufferFrame, 0);
+@@ -165,18 +155,10 @@ bool CEncoderFFmpeg::Init()
+ 
+     if (m_needConversion)
+     {
+-#if LIBSWRESAMPLE_BUILD >= AV_VERSION_INT(4, 7, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+       int ret = swr_alloc_set_opts2(&m_swrCtx, &m_codecCtx->ch_layout, m_outFormat,
+                                     m_codecCtx->sample_rate, &m_codecCtx->ch_layout, m_inFormat,
+                                     m_codecCtx->sample_rate, 0, nullptr);
+       if (ret || swr_init(m_swrCtx) < 0)
+-#else
+-      m_swrCtx = swr_alloc_set_opts(nullptr, m_codecCtx->channel_layout, m_outFormat,
+-                                    m_codecCtx->sample_rate, m_codecCtx->channel_layout, m_inFormat,
+-                                    m_codecCtx->sample_rate, 0, nullptr);
+-      if (!m_swrCtx || swr_init(m_swrCtx) < 0)
+-#endif
+         throw FFMpegException("Failed to initialize the resampler");
+ 
+       m_resampledBufferSize =
+@@ -188,13 +170,8 @@ bool CEncoderFFmpeg::Init()
+ 
+       m_resampledFrame->nb_samples = m_neededFrames;
+       m_resampledFrame->format = m_outFormat;
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+       av_channel_layout_uninit(&m_resampledFrame->ch_layout);
+       av_channel_layout_copy(&m_resampledFrame->ch_layout, &m_codecCtx->ch_layout);
+-#else
+-      m_resampledFrame->channel_layout = m_codecCtx->channel_layout;
+-#endif
+       m_resampledFrame->sample_rate = m_codecCtx->sample_rate;
+ 
+       err = av_frame_get_buffer(m_resampledFrame, 0);
+@@ -230,23 +207,14 @@ bool CEncoderFFmpeg::Init()
+     CLog::Log(LOGERROR, "CEncoderFFmpeg::{} - {}", __func__, caught.what());
+ 
+     av_freep(&m_buffer);
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+     av_channel_layout_uninit(&m_bufferFrame->ch_layout);
+-#endif
+     av_frame_free(&m_bufferFrame);
+     swr_free(&m_swrCtx);
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+     av_channel_layout_uninit(&m_resampledFrame->ch_layout);
+-#endif
+     av_frame_free(&m_resampledFrame);
+     av_freep(&m_resampledBuffer);
+     av_free(m_bcBuffer);
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+     av_channel_layout_uninit(&m_codecCtx->ch_layout);
+-#endif
+     avcodec_free_context(&m_codecCtx);
+     if (m_formatCtx)
+     {
+@@ -391,16 +359,10 @@ bool CEncoderFFmpeg::Close()
+ 
+     /* Flush if needed */
+     av_freep(&m_buffer);
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+     av_channel_layout_uninit(&m_bufferFrame->ch_layout);
+-#endif
+     av_frame_free(&m_bufferFrame);
+     swr_free(&m_swrCtx);
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+     av_channel_layout_uninit(&m_resampledFrame->ch_layout);
+-#endif
+     av_frame_free(&m_resampledFrame);
+     av_freep(&m_resampledBuffer);
+     m_needConversion = false;
+@@ -412,10 +374,7 @@ bool CEncoderFFmpeg::Close()
+ 
+     /* cleanup */
+     av_free(m_bcBuffer);
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+     av_channel_layout_uninit(&m_codecCtx->ch_layout);
+-#endif
+     avcodec_free_context(&m_codecCtx);
+     av_freep(&m_formatCtx->pb);
+     avformat_free_context(m_formatCtx);
+diff --git a/xbmc/cores/AudioEngine/Encoders/AEEncoderFFmpeg.cpp b/xbmc/cores/AudioEngine/Encoders/AEEncoderFFmpeg.cpp
+index 01cd9bd256..297db003f8 100644
+--- a/xbmc/cores/AudioEngine/Encoders/AEEncoderFFmpeg.cpp
++++ b/xbmc/cores/AudioEngine/Encoders/AEEncoderFFmpeg.cpp
+@@ -37,10 +37,7 @@ CAEEncoderFFmpeg::~CAEEncoderFFmpeg()
+ {
+   Reset();
+   swr_free(&m_SwrCtx);
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+   av_channel_layout_uninit(&m_CodecCtx->ch_layout);
+-#endif
+   avcodec_free_context(&m_CodecCtx);
+ }
+ 
+@@ -96,7 +93,7 @@ bool CAEEncoderFFmpeg::Initialize(AEAudioFormat &format, bool allow_planar_input
+ 
+   bool ac3 = CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_AUDIOOUTPUT_AC3PASSTHROUGH);
+ 
+-  FFMPEG_FMT_CONST AVCodec* codec = nullptr;
++  const AVCodec* codec = nullptr;
+ 
+   /* fallback to ac3 if we support it, we might not have DTS support */
+   if (ac3)
+@@ -117,13 +114,8 @@ bool CAEEncoderFFmpeg::Initialize(AEAudioFormat &format, bool allow_planar_input
+ 
+   m_CodecCtx->bit_rate = m_BitRate;
+   m_CodecCtx->sample_rate = format.m_sampleRate;
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+   av_channel_layout_uninit(&m_CodecCtx->ch_layout);
+   av_channel_layout_from_mask(&m_CodecCtx->ch_layout, AV_CH_LAYOUT_5POINT1_BACK);
+-#else
+-  m_CodecCtx->channel_layout = AV_CH_LAYOUT_5POINT1_BACK;
+-#endif
+ 
+   /* select a suitable data format */
+   if (codec->sample_fmts)
+@@ -200,43 +192,27 @@ bool CAEEncoderFFmpeg::Initialize(AEAudioFormat &format, bool allow_planar_input
+           LOGERROR,
+           "CAEEncoderFFmpeg::Initialize - Unable to find a suitable data format for the codec ({})",
+           m_CodecName);
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+       av_channel_layout_uninit(&m_CodecCtx->ch_layout);
+-#endif
+       avcodec_free_context(&m_CodecCtx);
+       return false;
+     }
+   }
+ 
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+   uint64_t mask = m_CodecCtx->ch_layout.u.mask;
+   av_channel_layout_uninit(&m_CodecCtx->ch_layout);
+   av_channel_layout_from_mask(&m_CodecCtx->ch_layout, mask);
+   m_CodecCtx->ch_layout.nb_channels = BuildChannelLayout(mask, m_Layout);
+-#else
+-  m_CodecCtx->channels = BuildChannelLayout(m_CodecCtx->channel_layout, m_Layout);
+-#endif
+ 
+   /* open the codec */
+   if (avcodec_open2(m_CodecCtx, codec, NULL))
+   {
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+     av_channel_layout_uninit(&m_CodecCtx->ch_layout);
+-#endif
+     avcodec_free_context(&m_CodecCtx);
+     return false;
+   }
+ 
+   format.m_frames = m_CodecCtx->frame_size;
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+   int channels = m_CodecCtx->ch_layout.nb_channels;
+-#else
+-  int channels = m_CodecCtx->channels;
+-#endif
+   format.m_frameSize = channels * (CAEUtil::DataFormatToBits(format.m_dataFormat) >> 3);
+   format.m_channelLayout = m_Layout;
+ 
+@@ -247,26 +223,14 @@ bool CAEEncoderFFmpeg::Initialize(AEAudioFormat &format, bool allow_planar_input
+ 
+   if (m_NeedConversion)
+   {
+-#if LIBSWRESAMPLE_BUILD >= AV_VERSION_INT(4, 7, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+     int ret = swr_alloc_set_opts2(&m_SwrCtx, &m_CodecCtx->ch_layout, m_CodecCtx->sample_fmt,
+                                   m_CodecCtx->sample_rate, &m_CodecCtx->ch_layout,
+                                   AV_SAMPLE_FMT_FLT, m_CodecCtx->sample_rate, 0, NULL);
+     if (ret || swr_init(m_SwrCtx) < 0)
+-#else
+-    m_SwrCtx = swr_alloc_set_opts(NULL,
+-                      m_CodecCtx->channel_layout, m_CodecCtx->sample_fmt, m_CodecCtx->sample_rate,
+-                      m_CodecCtx->channel_layout, AV_SAMPLE_FMT_FLT, m_CodecCtx->sample_rate,
+-                      0, NULL);
+-    if (!m_SwrCtx || swr_init(m_SwrCtx) < 0)
+-#endif
+     {
+       CLog::Log(LOGERROR, "CAEEncoderFFmpeg::Initialize - Failed to initialise resampler.");
+       swr_free(&m_SwrCtx);
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+       av_channel_layout_uninit(&m_CodecCtx->ch_layout);
+-#endif
+       avcodec_free_context(&m_CodecCtx);
+       return false;
+     }
+@@ -320,16 +284,9 @@ int CAEEncoderFFmpeg::Encode(uint8_t *in, int in_size, uint8_t *out, int out_siz
+ 
+     frame->nb_samples = m_CodecCtx->frame_size;
+     frame->format = m_CodecCtx->sample_fmt;
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+     av_channel_layout_uninit(&frame->ch_layout);
+     av_channel_layout_copy(&frame->ch_layout, &m_CodecCtx->ch_layout);
+     int channelNum = m_CodecCtx->ch_layout.nb_channels;
+-#else
+-    frame->channel_layout = m_CodecCtx->channel_layout;
+-    frame->channels = m_CodecCtx->channels;
+-    int channelNum = m_CodecCtx->channels;
+-#endif
+ 
+     avcodec_fill_audio_frame(frame, channelNum, m_CodecCtx->sample_fmt, in, in_size, 0);
+ 
+@@ -347,10 +304,7 @@ int CAEEncoderFFmpeg::Encode(uint8_t *in, int in_size, uint8_t *out, int out_siz
+       err = avcodec_receive_packet(m_CodecCtx, pkt);
+       if (err == AVERROR(EAGAIN) || err == AVERROR_EOF)
+       {
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+         av_channel_layout_uninit(&frame->ch_layout);
+-#endif
+         av_frame_free(&frame);
+         av_packet_free(&pkt);
+         return (err == AVERROR(EAGAIN)) ? -1 : 0;
+diff --git a/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAE.cpp b/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAE.cpp
+index 9cd3bddda8..74ddace8e4 100644
+--- a/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAE.cpp
++++ b/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAE.cpp
+@@ -22,7 +22,6 @@ using namespace ActiveAE;
+ #include "cores/AudioEngine/Utils/AEStreamData.h"
+ #include "cores/AudioEngine/Utils/AEStreamInfo.h"
+ #include "cores/AudioEngine/Utils/AEUtil.h"
+-#include "cores/FFmpeg.h"
+ #include "settings/Settings.h"
+ #include "settings/SettingsComponent.h"
+ #include "utils/log.h"
+@@ -3016,8 +3015,8 @@ IAE::SoundPtr CActiveAE::MakeSound(const std::string& file)
+   AVFormatContext *fmt_ctx = nullptr;
+   AVCodecContext *dec_ctx = nullptr;
+   AVIOContext *io_ctx;
+-  FFMPEG_FMT_CONST AVInputFormat* io_fmt = nullptr;
+-  FFMPEG_FMT_CONST AVCodec* dec = nullptr;
++  const AVInputFormat* io_fmt = nullptr;
++  const AVCodec* dec = nullptr;
+   SampleConfig config;
+ 
+   // No custom deleter until sound is registered
+@@ -3069,14 +3068,8 @@ IAE::SoundPtr CActiveAE::MakeSound(const std::string& file)
+       AVCodecID codecId = fmt_ctx->streams[0]->codecpar->codec_id;
+       dec = avcodec_find_decoder(codecId);
+       config.sample_rate = fmt_ctx->streams[0]->codecpar->sample_rate;
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+       config.channels = fmt_ctx->streams[0]->codecpar->ch_layout.nb_channels;
+       config.channel_layout = fmt_ctx->streams[0]->codecpar->ch_layout.u.mask;
+-#else
+-      config.channels = fmt_ctx->streams[0]->codecpar->channels;
+-      config.channel_layout = fmt_ctx->streams[0]->codecpar->channel_layout;
+-#endif
+     }
+   }
+   if (dec == nullptr)
+@@ -3092,8 +3085,6 @@ IAE::SoundPtr CActiveAE::MakeSound(const std::string& file)
+ 
+   dec_ctx = avcodec_alloc_context3(dec);
+   dec_ctx->sample_rate = config.sample_rate;
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+   AVChannelLayout layout = {};
+   if (!config.channel_layout)
+     av_channel_layout_default(&layout, config.channels);
+@@ -3102,12 +3093,6 @@ IAE::SoundPtr CActiveAE::MakeSound(const std::string& file)
+   config.channel_layout = layout.u.mask;
+   av_channel_layout_copy(&dec_ctx->ch_layout, &layout);
+   av_channel_layout_uninit(&layout);
+-#else
+-  dec_ctx->channels = config.channels;
+-  if (!config.channel_layout)
+-    config.channel_layout = av_get_default_channel_layout(config.channels);
+-  dec_ctx->channel_layout = config.channel_layout;
+-#endif
+ 
+   AVPacket* avpkt = av_packet_alloc();
+   if (!avpkt)
+@@ -3174,10 +3159,7 @@ IAE::SoundPtr CActiveAE::MakeSound(const std::string& file)
+ 
+   av_packet_free(&avpkt);
+   av_frame_free(&decoded_frame);
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+   av_channel_layout_uninit(&dec_ctx->ch_layout);
+-#endif
+   avcodec_free_context(&dec_ctx);
+   avformat_close_input(&fmt_ctx);
+   if (io_ctx)
+diff --git a/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAEFilter.cpp b/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAEFilter.cpp
+index 1d79dc6db4..9c79d8740d 100644
+--- a/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAEFilter.cpp
++++ b/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAEFilter.cpp
+@@ -16,7 +16,6 @@ extern "C" {
+ #include <libavfilter/avfilter.h>
+ #include <libavfilter/buffersink.h>
+ #include <libavfilter/buffersrc.h>
+-#include <libavutil/version.h>
+ #include <libswresample/swresample.h>
+ }
+ 
+@@ -173,10 +172,7 @@ void CActiveAEFilter::CloseFilter()
+ 
+   if (m_pOutFrame)
+   {
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+     av_channel_layout_uninit(&m_pOutFrame->ch_layout);
+-#endif
+     av_frame_free(&m_pOutFrame);
+   }
+ 
+@@ -212,17 +208,9 @@ int CActiveAEFilter::ProcessFilter(uint8_t **dst_buffer, int dst_samples, uint8_
+     if (!frame)
+       return -1;
+ 
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+     av_channel_layout_uninit(&frame->ch_layout);
+     av_channel_layout_from_mask(&frame->ch_layout, m_channelLayout);
+     int channels = frame->ch_layout.nb_channels;
+-#else
+-    int channels = av_get_channel_layout_nb_channels(m_channelLayout);
+-
+-    frame->channel_layout = m_channelLayout;
+-    frame->channels = channels;
+-#endif
+     frame->sample_rate = m_sampleRate;
+     frame->nb_samples = src_samples;
+     frame->format = m_sampleFormat;
+@@ -238,10 +226,7 @@ int CActiveAEFilter::ProcessFilter(uint8_t **dst_buffer, int dst_samples, uint8_
+                              src_buffer[0], src_bufsize, 16);
+     if (result < 0)
+     {
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+       av_channel_layout_uninit(&frame->ch_layout);
+-#endif
+       av_frame_free(&frame);
+       CLog::Log(LOGERROR, "CActiveAEFilter::ProcessFilter - avcodec_fill_audio_frame failed");
+       m_filterEof = true;
+@@ -249,10 +234,7 @@ int CActiveAEFilter::ProcessFilter(uint8_t **dst_buffer, int dst_samples, uint8_
+     }
+ 
+     result = av_buffersrc_write_frame(m_pFilterCtxIn, frame);
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+     av_channel_layout_uninit(&frame->ch_layout);
+-#endif
+     av_frame_free(&frame);
+     if (result < 0)
+     {
+@@ -306,13 +288,8 @@ int CActiveAEFilter::ProcessFilter(uint8_t **dst_buffer, int dst_samples, uint8_
+     {
+       av_frame_unref(m_pOutFrame);
+       m_pOutFrame->format = m_sampleFormat;
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+       av_channel_layout_uninit(&m_pOutFrame->ch_layout);
+       av_channel_layout_from_mask(&m_pOutFrame->ch_layout, m_channelLayout);
+-#else
+-      m_pOutFrame->channel_layout = m_channelLayout;
+-#endif
+       m_pOutFrame->sample_rate = m_sampleRate;
+       result = swr_convert_frame(m_pConvertCtx, m_pOutFrame, m_pConvertFrame);
+       av_frame_unref(m_pConvertFrame);
+@@ -330,15 +307,10 @@ int CActiveAEFilter::ProcessFilter(uint8_t **dst_buffer, int dst_samples, uint8_
+ 
+   if (m_hasData)
+   {
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+     AVChannelLayout layout = {};
+     av_channel_layout_from_mask(&layout, m_channelLayout);
+     int channels = layout.nb_channels;
+     av_channel_layout_uninit(&layout);
+-#else
+-    int channels = av_get_channel_layout_nb_channels(m_channelLayout);
+-#endif
+     int planes = av_sample_fmt_is_planar(m_sampleFormat) ? channels : 1;
+     int samples = std::min(dst_samples, m_pOutFrame->nb_samples - m_sampleOffset);
+     int bytes = samples * av_get_bytes_per_sample(m_sampleFormat) * channels / planes;
+diff --git a/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAEResampleFFMPEG.cpp b/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAEResampleFFMPEG.cpp
+index 379dfe6446..02c8eb1b83 100644
+--- a/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAEResampleFFMPEG.cpp
++++ b/xbmc/cores/AudioEngine/Engines/ActiveAE/ActiveAEResampleFFMPEG.cpp
+@@ -11,10 +11,8 @@
+ #include "utils/log.h"
+ 
+ extern "C" {
+-#include <libavcodec/version.h>
+ #include <libavutil/channel_layout.h>
+ #include <libavutil/opt.h>
+-#include <libavutil/version.h>
+ #include <libswresample/swresample.h>
+ }
+ 
+@@ -51,32 +49,20 @@ bool CActiveAEResampleFFMPEG::Init(SampleConfig dstConfig, SampleConfig srcConfi
+     m_doesResample = true;
+ 
+   if (m_dst_chan_layout == 0)
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+   {
+     AVChannelLayout layout = {};
+     av_channel_layout_default(&layout, m_dst_channels);
+     m_dst_chan_layout = layout.u.mask;
+     av_channel_layout_uninit(&layout);
+   }
+-#else
+-    m_dst_chan_layout = av_get_default_channel_layout(m_dst_channels);
+-#endif
+   if (m_src_chan_layout == 0)
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+   {
+     AVChannelLayout layout = {};
+     av_channel_layout_default(&layout, m_src_channels);
+     m_src_chan_layout = layout.u.mask;
+     av_channel_layout_uninit(&layout);
+   }
+-#else
+-    m_src_chan_layout = av_get_default_channel_layout(m_src_channels);
+-#endif
+ 
+-#if LIBSWRESAMPLE_BUILD >= AV_VERSION_INT(4, 7, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+   AVChannelLayout dstChLayout = {};
+   AVChannelLayout srcChLayout = {};
+ 
+@@ -87,13 +73,6 @@ bool CActiveAEResampleFFMPEG::Init(SampleConfig dstConfig, SampleConfig srcConfi
+                                 m_src_fmt, m_src_rate, 0, NULL);
+ 
+   if (ret)
+-#else
+-  m_pContext = swr_alloc_set_opts(NULL, m_dst_chan_layout, m_dst_fmt, m_dst_rate,
+-                                                        m_src_chan_layout, m_src_fmt, m_src_rate,
+-                                                        0, NULL);
+-
+-  if (!m_pContext)
+-#endif
+   {
+     CLog::Log(LOGERROR, "CActiveAEResampleFFMPEG::Init - create context failed");
+     return false;
+@@ -162,19 +141,11 @@ bool CActiveAEResampleFFMPEG::Init(SampleConfig dstConfig, SampleConfig srcConfi
+   else if (upmix && m_src_channels == 2 && m_dst_channels > 2)
+   {
+     memset(m_rematrix, 0, sizeof(m_rematrix));
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+     av_channel_layout_uninit(&dstChLayout);
+     av_channel_layout_from_mask(&dstChLayout, m_dst_chan_layout);
+-#endif
+     for (int out=0; out<m_dst_channels; out++)
+     {
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+       AVChannel outChan = av_channel_layout_channel_from_index(&dstChLayout, out);
+-#else
+-      uint64_t outChan = av_channel_layout_extract_channel(m_dst_chan_layout, out);
+-#endif
+       switch (outChan)
+       {
+         case AV_CH_FRONT_LEFT:
+@@ -200,10 +171,7 @@ bool CActiveAEResampleFFMPEG::Init(SampleConfig dstConfig, SampleConfig srcConfi
+       }
+     }
+ 
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+     av_channel_layout_uninit(&dstChLayout);
+-#endif
+ 
+     if (swr_set_matrix(m_pContext, (const double*)m_rematrix, AE_CH_MAX) < 0)
+     {
+diff --git a/xbmc/cores/AudioEngine/Utils/AEUtil.cpp b/xbmc/cores/AudioEngine/Utils/AEUtil.cpp
+index 98f82816ef..81a5f1995a 100644
+--- a/xbmc/cores/AudioEngine/Utils/AEUtil.cpp
++++ b/xbmc/cores/AudioEngine/Utils/AEUtil.cpp
+@@ -548,41 +548,12 @@ AVSampleFormat CAEUtil::GetAVSampleFormat(AEDataFormat format)
+ 
+ uint64_t CAEUtil::GetAVChannelMask(enum AEChannel aechannel)
+ {
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+   enum AVChannel ch = GetAVChannel(aechannel);
+   if (ch == AV_CHAN_NONE)
+     return 0;
+   return (1ULL << ch);
+-#else
+-  switch (aechannel)
+-  {
+-  case AE_CH_FL:   return AV_CH_FRONT_LEFT;
+-  case AE_CH_FR:   return AV_CH_FRONT_RIGHT;
+-  case AE_CH_FC:   return AV_CH_FRONT_CENTER;
+-  case AE_CH_LFE:  return AV_CH_LOW_FREQUENCY;
+-  case AE_CH_BL:   return AV_CH_BACK_LEFT;
+-  case AE_CH_BR:   return AV_CH_BACK_RIGHT;
+-  case AE_CH_FLOC: return AV_CH_FRONT_LEFT_OF_CENTER;
+-  case AE_CH_FROC: return AV_CH_FRONT_RIGHT_OF_CENTER;
+-  case AE_CH_BC:   return AV_CH_BACK_CENTER;
+-  case AE_CH_SL:   return AV_CH_SIDE_LEFT;
+-  case AE_CH_SR:   return AV_CH_SIDE_RIGHT;
+-  case AE_CH_TC:   return AV_CH_TOP_CENTER;
+-  case AE_CH_TFL:  return AV_CH_TOP_FRONT_LEFT;
+-  case AE_CH_TFC:  return AV_CH_TOP_FRONT_CENTER;
+-  case AE_CH_TFR:  return AV_CH_TOP_FRONT_RIGHT;
+-  case AE_CH_TBL:  return AV_CH_TOP_BACK_LEFT;
+-  case AE_CH_TBC:  return AV_CH_TOP_BACK_CENTER;
+-  case AE_CH_TBR:  return AV_CH_TOP_BACK_RIGHT;
+-  default:
+-    return 0;
+-  }
+-#endif
+ }
+ 
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+ enum AVChannel CAEUtil::GetAVChannel(enum AEChannel aechannel)
+ {
+   switch (aechannel)
+@@ -627,18 +598,12 @@ enum AVChannel CAEUtil::GetAVChannel(enum AEChannel aechannel)
+       return AV_CHAN_NONE;
+   }
+ }
+-#endif
+ 
+ int CAEUtil::GetAVChannelIndex(enum AEChannel aechannel, uint64_t layout)
+ {
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+   AVChannelLayout ch_layout = {};
+   av_channel_layout_from_mask(&ch_layout, layout);
+   int idx = av_channel_layout_index_from_channel(&ch_layout, GetAVChannel(aechannel));
+   av_channel_layout_uninit(&ch_layout);
+   return idx;
+-#else
+-  return av_get_channel_layout_channel_index(layout, GetAVChannelMask(aechannel));
+-#endif
+ }
+diff --git a/xbmc/cores/AudioEngine/Utils/AEUtil.h b/xbmc/cores/AudioEngine/Utils/AEUtil.h
+index 8acbeec442..6b5fc123c6 100644
+--- a/xbmc/cores/AudioEngine/Utils/AEUtil.h
++++ b/xbmc/cores/AudioEngine/Utils/AEUtil.h
+@@ -13,10 +13,8 @@
+ #include <math.h>
+ 
+ extern "C" {
+-#include <libavcodec/version.h>
+ #include <libavutil/channel_layout.h>
+ #include <libavutil/samplefmt.h>
+-#include <libavutil/version.h>
+ }
+ 
+ // AV sync options
+@@ -175,9 +173,6 @@ public:
+   static CAEChannelInfo GetAEChannelLayout(uint64_t layout);
+   static AVSampleFormat GetAVSampleFormat(AEDataFormat format);
+   static uint64_t GetAVChannelMask(enum AEChannel aechannel);
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+   static enum AVChannel GetAVChannel(enum AEChannel aechannel);
+-#endif
+   static int GetAVChannelIndex(enum AEChannel aechannel, uint64_t layout);
+ };
+diff --git a/xbmc/cores/FFmpeg.cpp b/xbmc/cores/FFmpeg.cpp
+index 7eaf01aa21..b8ce4cbd0d 100644
+--- a/xbmc/cores/FFmpeg.cpp
++++ b/xbmc/cores/FFmpeg.cpp
+@@ -147,7 +147,6 @@ std::tuple<uint8_t*, int> GetPacketExtradata(const AVPacket* pkt,
+   uint8_t* extraData = nullptr;
+   int extraDataSize = 0;
+ 
+-#if LIBAVFORMAT_BUILD >= AV_VERSION_INT(59, 0, 100)
+   /* extract_extradata bitstream filter is implemented only
+    * for certain codecs, as noted in discussion of PR#21248
+    */
+@@ -258,28 +257,6 @@ std::tuple<uint8_t*, int> GetPacketExtradata(const AVPacket* pkt,
+ 
+   av_bsf_free(&bsf);
+   av_packet_free(&dstPkt);
+-#else
+-  if (codecCtx && parserCtx && parserCtx->parser && parserCtx->parser->split)
+-    extraDataSize = parserCtx->parser->split(codecCtx, pkt->data, pkt->size);
+-
+-  if (extraDataSize <= 0 || extraDataSize >= FF_MAX_EXTRADATA_SIZE)
+-  {
+-    CLog::LogF(LOGDEBUG, "fetched extradata of weird size {}", extraDataSize);
+-    return std::make_tuple(nullptr, 0);
+-  }
+-
+-  extraData = (uint8_t*)av_malloc(extraDataSize + AV_INPUT_BUFFER_PADDING_SIZE);
+-  if (!extraData)
+-  {
+-    CLog::LogF(LOGERROR, "failed to allocate {} bytes for extradata", extraDataSize);
+-    return std::make_tuple(nullptr, 0);
+-  }
+-
+-  CLog::LogF(LOGDEBUG, "fetching extradata, extradata_size({})", extraDataSize);
+-
+-  memcpy(extraData, pkt->data, extraDataSize);
+-  memset(extraData + extraDataSize, 0, AV_INPUT_BUFFER_PADDING_SIZE);
+-#endif
+ 
+   return std::make_tuple(extraData, extraDataSize);
+ }
+diff --git a/xbmc/cores/FFmpeg.h b/xbmc/cores/FFmpeg.h
+index cd1974f9d6..29a8eadf1a 100644
+--- a/xbmc/cores/FFmpeg.h
++++ b/xbmc/cores/FFmpeg.h
+@@ -24,13 +24,6 @@ extern "C" {
+ 
+ #include <tuple>
+ 
+-// https://github.com/FFmpeg/FFmpeg/blob/56450a0ee4/doc/APIchanges#L18-L26
+-#if LIBAVFORMAT_BUILD >= AV_VERSION_INT(59, 0, 100)
+-#define FFMPEG_FMT_CONST const
+-#else
+-#define FFMPEG_FMT_CONST
+-#endif
+-
+ namespace FFMPEG_HELP_TOOLS
+ {
+ 
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Audio/DVDAudioCodecFFmpeg.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Audio/DVDAudioCodecFFmpeg.cpp
+index 44dcb32620..b2849c797d 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Audio/DVDAudioCodecFFmpeg.cpp
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Audio/DVDAudioCodecFFmpeg.cpp
+@@ -46,7 +46,7 @@ bool CDVDAudioCodecFFmpeg::Open(CDVDStreamInfo &hints, CDVDCodecOptions &options
+     return false;
+   }
+ 
+-  FFMPEG_FMT_CONST AVCodec* pCodec = nullptr;
++  const AVCodec* pCodec = nullptr;
+   bool allowdtshddecode = true;
+ 
+   // set any special options
+@@ -78,14 +78,9 @@ bool CDVDAudioCodecFFmpeg::Open(CDVDStreamInfo &hints, CDVDCodecOptions &options
+ 
+   m_matrixEncoding = AV_MATRIX_ENCODING_NONE;
+   m_channels = 0;
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+   av_channel_layout_uninit(&m_pCodecContext->ch_layout);
+   m_pCodecContext->ch_layout.order = AV_CHANNEL_ORDER_NATIVE;
+   m_pCodecContext->ch_layout.nb_channels = hints.channels;
+-#else
+-  m_pCodecContext->channels = hints.channels;
+-#endif
+   m_hint_layout = hints.channellayout;
+   m_pCodecContext->sample_rate = hints.samplerate;
+   m_pCodecContext->block_align = hints.blockalign;
+@@ -268,12 +263,7 @@ int CDVDAudioCodecFFmpeg::GetData(uint8_t** dst)
+     m_format.m_frameSize = m_format.m_channelLayout.Count() *
+                            CAEUtil::DataFormatToBits(m_format.m_dataFormat) >> 3;
+ 
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+     int channels = m_pFrame->ch_layout.nb_channels;
+-#else
+-    int channels = m_pFrame->channels;
+-#endif
+     int planes = av_sample_fmt_is_planar(m_pCodecContext->sample_fmt) ? channels : 1;
+ 
+     for (int i=0; i<planes; i++)
+@@ -293,12 +283,7 @@ void CDVDAudioCodecFFmpeg::Reset()
+ 
+ int CDVDAudioCodecFFmpeg::GetChannels()
+ {
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+   return m_pCodecContext->ch_layout.nb_channels;
+-#else
+-  return m_pCodecContext->channels;
+-#endif
+ }
+ 
+ int CDVDAudioCodecFFmpeg::GetSampleRate()
+@@ -365,14 +350,8 @@ static unsigned count_bits(int64_t value)
+ 
+ void CDVDAudioCodecFFmpeg::BuildChannelMap()
+ {
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+   int codecChannels = m_pCodecContext->ch_layout.nb_channels;
+   uint64_t codecChannelLayout = m_pCodecContext->ch_layout.u.mask;
+-#else
+-  int codecChannels = m_pCodecContext->channels;
+-  uint64_t codecChannelLayout = m_pCodecContext->channel_layout;
+-#endif
+   if (m_channels == codecChannels && m_layout == codecChannelLayout)
+     return; //nothing to do here
+ 
+@@ -394,15 +373,10 @@ void CDVDAudioCodecFFmpeg::BuildChannelMap()
+       layout = m_hint_layout;
+     else
+     {
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+       AVChannelLayout def_layout = {};
+       av_channel_layout_default(&def_layout, codecChannels);
+       layout = def_layout.u.mask;
+       av_channel_layout_uninit(&def_layout);
+-#else
+-      layout = av_get_default_channel_layout(m_pCodecContext->channels);
+-#endif
+       CLog::Log(LOGINFO, "Using default layout...");
+     }
+   }
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlayCodecFFmpeg.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlayCodecFFmpeg.cpp
+index 3657fc093c..164360ff53 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlayCodecFFmpeg.cpp
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlayCodecFFmpeg.cpp
+@@ -40,7 +40,7 @@ bool CDVDOverlayCodecFFmpeg::Open(CDVDStreamInfo &hints, CDVDCodecOptions &optio
+   if (hints.codec == AV_CODEC_ID_EIA_608)
+     return false;
+ 
+-  FFMPEG_FMT_CONST AVCodec* pCodec = avcodec_find_decoder(hints.codec);
++  const AVCodec* pCodec = avcodec_find_decoder(hints.codec);
+   if (!pCodec)
+   {
+     CLog::Log(LOGDEBUG, "{} - Unable to find codec {}", __FUNCTION__, hints.codec);
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecFFmpeg.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecFFmpeg.cpp
+index e0c93520b3..bb9c20bf9d 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecFFmpeg.cpp
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecFFmpeg.cpp
+@@ -329,7 +329,7 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints, CDVDCodecOptions &options
+   m_hints = hints;
+   m_options = options;
+ 
+-  FFMPEG_FMT_CONST AVCodec* pCodec = nullptr;
++  const AVCodec* pCodec = nullptr;
+ 
+   m_iOrientation = hints.orientation;
+ 
+@@ -1052,8 +1052,6 @@ bool CDVDVideoCodecFFmpeg::GetPictureCommon(VideoPicture* pVideoPicture)
+   AVFrameSideData* sd;
+ 
+   // https://github.com/FFmpeg/FFmpeg/blob/991d417692/doc/APIchanges#L18-L20
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(58, 84, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(56, 45, 100)
+   sd = av_frame_get_side_data(m_pFrame, AV_FRAME_DATA_VIDEO_ENC_PARAMS);
+   if (sd)
+   {
+@@ -1075,28 +1073,6 @@ bool CDVDVideoCodecFFmpeg::GetPictureCommon(VideoPicture* pVideoPicture)
+       }
+     }
+   }
+-#else
+-  sd = av_frame_get_side_data(m_pFrame, AV_FRAME_DATA_QP_TABLE_PROPERTIES);
+-  if (sd)
+-  {
+-    struct qp_properties
+-    {
+-      int stride;
+-      int type;
+-    };
+-
+-    auto qp = reinterpret_cast<qp_properties*>(sd->data);
+-
+-    sd = av_frame_get_side_data(m_pFrame, AV_FRAME_DATA_QP_TABLE_DATA);
+-    if (sd && sd->buf && qp)
+-    {
+-      // this seems wrong but it's what ffmpeg does internally
+-      pVideoPicture->qp_table = reinterpret_cast<int8_t*>(sd->buf->data);
+-      pVideoPicture->qstride = qp->stride;
+-      pVideoPicture->qscale_type = qp->type;
+-    }
+-  }
+-#endif
+ 
+   pVideoPicture->pict_type = m_pFrame->pict_type;
+ 
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoPPFFmpeg.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoPPFFmpeg.cpp
+index 3b2739cd22..481d44672d 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoPPFFmpeg.cpp
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoPPFFmpeg.cpp
+@@ -119,10 +119,7 @@ void CDVDVideoPPFFmpeg::Process(VideoPicture* pPicture)
+                  pSource->pict_type | pSource->qscale_type ? PP_PICT_TYPE_QP2 : 0);
+ 
+   // https://github.com/FFmpeg/FFmpeg/blob/991d417692/doc/APIchanges#L18-L20
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(58, 84, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(56, 45, 100)
+   av_free(pSource->qp_table);
+-#endif
+ 
+   pPicture->SetParams(*pSource);
+   if (pPicture->videoBuffer)
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/VAAPI.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Video/VAAPI.cpp
+index 8d727e2270..a61f0840d4 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/VAAPI.cpp
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/VAAPI.cpp
+@@ -1256,15 +1256,9 @@ void CDecoder::ReturnRenderPicture(CVaapiRenderPicture *renderPic)
+ IHardwareDecoder* CDecoder::Create(CDVDStreamInfo &hint, CProcessInfo &processInfo, AVPixelFormat fmt)
+ {
+   // https://github.com/FFmpeg/FFmpeg/blob/56450a0ee4fdda160f4039fc2ae33edfd27765c9/doc/APIchanges#L18-L26
+-#if LIBAVUTIL_BUILD >= AV_VERSION_INT(55, 8, 0)
+-#define PIX_FMT_VAAPI AV_PIX_FMT_VAAPI
+-#else
+-#define PIX_FMT_VAAPI AV_PIX_FMT_VAAPI_VLD
+-#endif
+-  if (fmt == PIX_FMT_VAAPI &&
++  if (fmt == AV_PIX_FMT_VAAPI &&
+       CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(SETTING_VIDEOPLAYER_USEVAAPI))
+     return new VAAPI::CDecoder(processInfo);
+-#undef PIX_FMT_VAAPI
+ 
+   return nullptr;
+ }
+diff --git a/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxClient.cpp b/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxClient.cpp
+index c7850ed34b..ed3218cf11 100644
+--- a/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxClient.cpp
++++ b/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxClient.cpp
+@@ -130,7 +130,7 @@ bool CDVDDemuxClient::ParsePacket(DemuxPacket* pkt)
+ 
+   if (stream->m_context == nullptr)
+   {
+-    FFMPEG_FMT_CONST AVCodec* codec = avcodec_find_decoder(st->codec);
++    const AVCodec* codec = avcodec_find_decoder(st->codec);
+     if (codec == nullptr)
+     {
+       CLog::Log(LOGERROR, "{} - can't find decoder", __FUNCTION__);
+@@ -224,12 +224,7 @@ bool CDVDDemuxClient::ParsePacket(DemuxPacket* pkt)
+       case STREAM_AUDIO:
+       {
+         CDemuxStreamClientInternalTpl<CDemuxStreamAudio>* sta = static_cast<CDemuxStreamClientInternalTpl<CDemuxStreamAudio>*>(st);
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+         int streamChannels = stream->m_context->ch_layout.nb_channels;
+-#else
+-        int streamChannels = stream->m_context->channels;
+-#endif
+         if (streamChannels != sta->iChannels && streamChannels != 0)
+         {
+           CLog::Log(LOGDEBUG, "CDVDDemuxClient::ParsePacket - ({}) channels changed from {} to {}",
+diff --git a/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxFFmpeg.cpp b/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxFFmpeg.cpp
+index fbb3e155b9..b81153e82a 100644
+--- a/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxFFmpeg.cpp
++++ b/xbmc/cores/VideoPlayer/DVDDemuxers/DVDDemuxFFmpeg.cpp
+@@ -235,7 +235,7 @@ bool CDVDDemuxFFmpeg::Aborted()
+ 
+ bool CDVDDemuxFFmpeg::Open(const std::shared_ptr<CDVDInputStream>& pInput, bool fileinfo)
+ {
+-  FFMPEG_FMT_CONST AVInputFormat* iformat = nullptr;
++  const AVInputFormat* iformat = nullptr;
+   std::string strFile;
+   m_streaminfo = !pInput->IsRealtime() && !m_reopen;
+   m_reopen = false;
+@@ -422,7 +422,7 @@ bool CDVDDemuxFFmpeg::Open(const std::shared_ptr<CDVDInputStream>& pInput, bool
+           // is present, we assume it is PCM audio.
+           // AC3 is always wrapped in iec61937 (ffmpeg "spdif"), while DTS
+           // may be just padded.
+-          FFMPEG_FMT_CONST AVInputFormat* iformat2 = av_find_input_format("spdif");
++          const AVInputFormat* iformat2 = av_find_input_format("spdif");
+           if (iformat2 && iformat2->read_probe(&pd) > AVPROBE_SCORE_MAX / 4)
+           {
+             iformat = iformat2;
+@@ -542,15 +542,6 @@ bool CDVDDemuxFFmpeg::Open(const std::shared_ptr<CDVDInputStream>& pInput, bool
+     m_streaminfo = true;
+   }
+ 
+-  // https://github.com/FFmpeg/FFmpeg/blob/56450a0ee4/doc/APIchanges#L18-L26
+-#if LIBAVFORMAT_BUILD < AV_VERSION_INT(59, 0, 100)
+-  if (iformat && (strcmp(iformat->name, "mov,mp4,m4a,3gp,3g2,mj2") == 0))
+-  {
+-    if (URIUtils::IsRemote(strFile))
+-      m_pFormatContext->iformat->flags |= AVFMT_NOGENSEARCH;
+-  }
+-#endif
+-
+   // we need to know if this is matroska, avi or sup later
+   m_bMatroska = strncmp(m_pFormatContext->iformat->name, "matroska", 8) == 0;	// for "matroska.webm"
+   m_bAVI = strcmp(m_pFormatContext->iformat->name, "avi") == 0;
+@@ -605,12 +596,6 @@ bool CDVDDemuxFFmpeg::Open(const std::shared_ptr<CDVDInputStream>& pInput, bool
+   // if format can be nonblocking, let's use that
+   m_pFormatContext->flags |= AVFMT_FLAG_NONBLOCK;
+ 
+-  // https://github.com/FFmpeg/FFmpeg/blob/d682ae70b4/doc/APIchanges#L18-L21
+-#if LIBAVFORMAT_BUILD < AV_VERSION_INT(57, 66, 105) && \
+-    LIBAVCODEC_BUILD < AV_VERSION_INT(57, 83, 101)
+-  m_pFormatContext->flags |= AVFMT_FLAG_KEEP_SIDE_DATA;
+-#endif
+-
+   UpdateCurrentPTS();
+ 
+   // select the correct program if requested
+@@ -651,7 +636,6 @@ bool CDVDDemuxFFmpeg::Open(const std::shared_ptr<CDVDInputStream>& pInput, bool
+           {
+             int idx = m_pFormatContext->programs[i]->stream_index[j];
+             AVStream* st = m_pFormatContext->streams[idx];
+-#if LIBAVFORMAT_BUILD >= AV_VERSION_INT(59, 3, 100)
+             // Related to https://patchwork.ffmpeg.org/project/ffmpeg/patch/20210429143825.53040-1-jamrial@gmail.com/
+             // has been replaced with AVSTREAM_EVENT_FLAG_NEW_PACKETS.
+             if ((st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
+@@ -661,14 +645,6 @@ bool CDVDDemuxFFmpeg::Open(const std::shared_ptr<CDVDInputStream>& pInput, bool
+               nProgram = i;
+               break;
+             }
+-#else
+-            if ((st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && st->codec_info_nb_frames > 0) ||
+-                (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && st->codecpar->sample_rate > 0))
+-            {
+-              nProgram = i;
+-              break;
+-            }
+-#endif
+           }
+         }
+       }
+@@ -1234,13 +1210,8 @@ DemuxPacket* CDVDDemuxFFmpeg::Read()
+     else if (stream->type == STREAM_AUDIO)
+     {
+       CDemuxStreamAudioFFmpeg* audiostream = dynamic_cast<CDemuxStreamAudioFFmpeg*>(stream);
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+       int codecparChannels =
+           m_pFormatContext->streams[pPacket->iStreamId]->codecpar->ch_layout.nb_channels;
+-#else
+-      int codecparChannels = m_pFormatContext->streams[pPacket->iStreamId]->codecpar->channels;
+-#endif
+       if (audiostream && (audiostream->iChannels != codecparChannels ||
+                           audiostream->iSampleRate !=
+                               m_pFormatContext->streams[pPacket->iStreamId]->codecpar->sample_rate))
+@@ -1426,19 +1397,11 @@ void CDVDDemuxFFmpeg::UpdateCurrentPTS()
+   {
+     AVStream* stream = m_pFormatContext->streams[idx];
+ 
+-#if LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 17, 100)
+     if (stream && m_pkt.pkt.dts != (int64_t)AV_NOPTS_VALUE)
+     {
+       double ts = ConvertTimestamp(m_pkt.pkt.dts, stream->time_base.den, stream->time_base.num);
+       m_currentPts = ts;
+     }
+-#else
+-    if (stream && stream->cur_dts != (int64_t)AV_NOPTS_VALUE)
+-    {
+-      double ts = ConvertTimestamp(stream->cur_dts, stream->time_base.den, stream->time_base.num);
+-      m_currentPts = ts;
+-    }
+-#endif
+   }
+ }
+ 
+@@ -1647,14 +1610,8 @@ CDemuxStream* CDVDDemuxFFmpeg::AddStream(int streamIdx)
+       {
+         CDemuxStreamAudioFFmpeg* st = new CDemuxStreamAudioFFmpeg(pStream);
+         stream = st;
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+         int codecparChannels = pStream->codecpar->ch_layout.nb_channels;
+         int codecparChannelLayout = pStream->codecpar->ch_layout.u.mask;
+-#else
+-        int codecparChannels = pStream->codecpar->channels;
+-        int codecparChannelLayout = pStream->codecpar->channel_layout;
+-#endif
+         st->iChannels = codecparChannels;
+         st->iChannelLayout = codecparChannelLayout;
+         st->iSampleRate = pStream->codecpar->sample_rate;
+@@ -1663,15 +1620,10 @@ CDemuxStream* CDVDDemuxFFmpeg::AddStream(int streamIdx)
+         st->iBitsPerSample = pStream->codecpar->bits_per_raw_sample;
+         char buf[32] = {};
+         // https://github.com/FFmpeg/FFmpeg/blob/6ccc3989d15/doc/APIchanges#L50-L53
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+         AVChannelLayout layout = {};
+         av_channel_layout_from_mask(&layout, st->iChannelLayout);
+         av_channel_layout_describe(&layout, buf, sizeof(buf));
+         av_channel_layout_uninit(&layout);
+-#else
+-        av_get_channel_layout_string(buf, 31, st->iChannels, st->iChannelLayout);
+-#endif
+         st->m_channelLayoutName = buf;
+         if (st->iBitsPerSample == 0)
+           st->iBitsPerSample = pStream->codecpar->bits_per_coded_sample;
+@@ -1713,18 +1665,6 @@ CDemuxStream* CDVDDemuxFFmpeg::AddStream(int streamIdx)
+           st->iFpsScale = 0;
+         }
+ 
+-#if LIBAVFORMAT_BUILD < AV_VERSION_INT(59, 3, 100)
+-        if (pStream->codec_info_nb_frames > 0 &&
+-            pStream->codec_info_nb_frames <= 2 &&
+-            m_pInput->IsStreamType(DVDSTREAM_TYPE_DVD))
+-        {
+-          CLog::Log(LOGDEBUG, "{} - fps may be unreliable since ffmpeg decoded only {} frame(s)",
+-                    __FUNCTION__, pStream->codec_info_nb_frames);
+-          st->iFpsRate  = 0;
+-          st->iFpsScale = 0;
+-        }
+-#endif
+-
+         st->iWidth = pStream->codecpar->width;
+         st->iHeight = pStream->codecpar->height;
+         st->fAspect = SelectAspect(pStream, st->bForcedAspect);
+@@ -1746,11 +1686,7 @@ CDemuxStream* CDVDDemuxFFmpeg::AddStream(int streamIdx)
+         st->hdr_type = DetermineHdrType(pStream);
+ 
+         // https://github.com/FFmpeg/FFmpeg/blob/release/5.0/doc/APIchanges
+-#if LIBAVFORMAT_BUILD >= AV_VERSION_INT(59, 10, 100)
+         size_t size = 0;
+-#else
+-        int size = 0;
+-#endif
+         uint8_t* side_data = nullptr;
+ 
+         side_data = av_stream_get_side_data(pStream, AV_PKT_DATA_MASTERING_DISPLAY_METADATA, &size);
+@@ -2159,7 +2095,7 @@ std::string CDVDDemuxFFmpeg::GetStreamCodecName(int iStreamId)
+       return strName;
+     }
+ 
+-    FFMPEG_FMT_CONST AVCodec* codec = avcodec_find_decoder(stream->codec);
++    const AVCodec* codec = avcodec_find_decoder(stream->codec);
+     if (codec)
+       strName = avcodec_get_name(codec->id);
+   }
+@@ -2214,12 +2150,7 @@ bool CDVDDemuxFFmpeg::IsProgramChange()
+     if (m_pFormatContext->streams[idx]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+     {
+       CDemuxStreamAudioFFmpeg* audiostream = dynamic_cast<CDemuxStreamAudioFFmpeg*>(stream);
+-#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+-    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+       int codecparChannels = m_pFormatContext->streams[idx]->codecpar->ch_layout.nb_channels;
+-#else
+-      int codecparChannels = m_pFormatContext->streams[idx]->codecpar->channels;
+-#endif
+       if (audiostream && codecparChannels != audiostream->iChannels)
+       {
+         return true;
+@@ -2340,7 +2271,7 @@ void CDVDDemuxFFmpeg::ParsePacket(AVPacket* pkt)
+ 
+       parser->second->m_parserCtx = av_parser_init(st->codecpar->codec_id);
+ 
+-      FFMPEG_FMT_CONST AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
++      const AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
+       if (codec == nullptr)
+       {
+         CLog::Log(LOGERROR, "{} - can't find decoder", __FUNCTION__);
+@@ -2410,12 +2341,8 @@ TRANSPORT_STREAM_STATE CDVDDemuxFFmpeg::TransportStreamAudioState()
+         {
+           if (!m_startTime)
+           {
+-#if LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 17, 100)
+             m_startTime =
+                 av_rescale(m_pkt.pkt.dts, st->time_base.num, st->time_base.den) - 0.000001;
+-#else
+-            m_startTime = av_rescale(st->cur_dts, st->time_base.num, st->time_base.den) - 0.000001;
+-#endif
+             m_seekStream = idx;
+           }
+           return TRANSPORT_STREAM_STATE::READY;
+@@ -2435,12 +2362,8 @@ TRANSPORT_STREAM_STATE CDVDDemuxFFmpeg::TransportStreamAudioState()
+         {
+           if (!m_startTime)
+           {
+-#if LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 17, 100)
+             m_startTime =
+                 av_rescale(m_pkt.pkt.dts, st->time_base.num, st->time_base.den) - 0.000001;
+-#else
+-            m_startTime = av_rescale(st->cur_dts, st->time_base.num, st->time_base.den) - 0.000001;
+-#endif
+             m_seekStream = i;
+           }
+           return TRANSPORT_STREAM_STATE::READY;
+@@ -2473,12 +2396,8 @@ TRANSPORT_STREAM_STATE CDVDDemuxFFmpeg::TransportStreamVideoState()
+         {
+           if (!m_startTime)
+           {
+-#if LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 17, 100)
+             m_startTime =
+                 av_rescale(m_pkt.pkt.dts, st->time_base.num, st->time_base.den) - 0.000001;
+-#else
+-            m_startTime = av_rescale(st->cur_dts, st->time_base.num, st->time_base.den) - 0.000001;
+-#endif
+             m_seekStream = idx;
+           }
+           return TRANSPORT_STREAM_STATE::READY;
+@@ -2498,12 +2417,8 @@ TRANSPORT_STREAM_STATE CDVDDemuxFFmpeg::TransportStreamVideoState()
+         {
+           if (!m_startTime)
+           {
+-#if LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 17, 100)
+             m_startTime =
+                 av_rescale(m_pkt.pkt.dts, st->time_base.num, st->time_base.den) - 0.000001;
+-#else
+-            m_startTime = av_rescale(st->cur_dts, st->time_base.num, st->time_base.den) - 0.000001;
+-#endif
+             m_seekStream = i;
+           }
+           return TRANSPORT_STREAM_STATE::READY;
+diff --git a/xbmc/cores/VideoPlayer/DVDInputStreams/InputStreamAddon.cpp b/xbmc/cores/VideoPlayer/DVDInputStreams/InputStreamAddon.cpp
+index cbcd9029c5..e927c94c26 100644
+--- a/xbmc/cores/VideoPlayer/DVDInputStreams/InputStreamAddon.cpp
++++ b/xbmc/cores/VideoPlayer/DVDInputStreams/InputStreamAddon.cpp
+@@ -393,7 +393,7 @@ KODI_HANDLE CInputStreamAddon::cb_get_stream_transfer(KODI_HANDLE handle,
+     return nullptr;
+ 
+   std::string codecName(stream->m_codecName);
+-  FFMPEG_FMT_CONST AVCodec* codec = nullptr;
++  const AVCodec* codec = nullptr;
+ 
+   if (stream->m_streamType != INPUTSTREAM_TYPE_TELETEXT &&
+       stream->m_streamType != INPUTSTREAM_TYPE_RDS && stream->m_streamType != INPUTSTREAM_TYPE_ID3)
+diff --git a/xbmc/filesystem/AudioBookFileDirectory.cpp b/xbmc/filesystem/AudioBookFileDirectory.cpp
+index d82b2a9bbd..94fb232db6 100644
+--- a/xbmc/filesystem/AudioBookFileDirectory.cpp
++++ b/xbmc/filesystem/AudioBookFileDirectory.cpp
+@@ -150,7 +150,7 @@ bool CAudioBookFileDirectory::ContainsFiles(const CURL& url)
+ 
+   m_ioctx->max_packet_size = 32768;
+ 
+-  FFMPEG_FMT_CONST AVInputFormat* iformat = nullptr;
++  const AVInputFormat* iformat = nullptr;
+   av_probe_input_buffer(m_ioctx, &iformat, url.Get().c_str(), nullptr, 0, 0);
+ 
+   bool contains = false;
+diff --git a/xbmc/guilib/FFmpegImage.cpp b/xbmc/guilib/FFmpegImage.cpp
+index 9d01a21f38..e71980998b 100644
+--- a/xbmc/guilib/FFmpegImage.cpp
++++ b/xbmc/guilib/FFmpegImage.cpp
+@@ -52,7 +52,7 @@ struct ThumbDataManagement
+   AVFrame* frame_temporary = nullptr;
+   SwsContext* sws = nullptr;
+   AVCodecContext* avOutctx = nullptr;
+-  FFMPEG_FMT_CONST AVCodec* codec = nullptr;
++  const AVCodec* codec = nullptr;
+   ~ThumbDataManagement()
+   {
+     av_free(intermediateBuffer);
+@@ -198,7 +198,7 @@ bool CFFmpegImage::Initialize(unsigned char* buffer, size_t bufSize)
+   bool is_png = (bufSize > 3 && buffer[1] == 'P' && buffer[2] == 'N' && buffer[3] == 'G');
+   bool is_tiff = (bufSize > 2 && buffer[0] == 'I' && buffer[1] == 'I' && buffer[2] == '*');
+ 
+-  FFMPEG_FMT_CONST AVInputFormat* inp = nullptr;
++  const AVInputFormat* inp = nullptr;
+   if (is_jpeg)
+     inp = av_find_input_format("image2");
+   else if (m_strMimeType == "image/apng")
+@@ -236,7 +236,7 @@ bool CFFmpegImage::Initialize(unsigned char* buffer, size_t bufSize)
+     return false;
+   }
+   AVCodecParameters* codec_params = m_fctx->streams[0]->codecpar;
+-  FFMPEG_FMT_CONST AVCodec* codec = avcodec_find_decoder(codec_params->codec_id);
++  const AVCodec* codec = avcodec_find_decoder(codec_params->codec_id);
+   m_codec_ctx = avcodec_alloc_context3(codec);
+   if (!m_codec_ctx)
+   {
+diff --git a/xbmc/music/tags/MusicInfoTagLoaderFFmpeg.cpp b/xbmc/music/tags/MusicInfoTagLoaderFFmpeg.cpp
+index dbd8893c97..6ede1a31df 100644
+--- a/xbmc/music/tags/MusicInfoTagLoaderFFmpeg.cpp
++++ b/xbmc/music/tags/MusicInfoTagLoaderFFmpeg.cpp
+@@ -58,7 +58,7 @@ bool CMusicInfoTagLoaderFFmpeg::Load(const std::string& strFileName, CMusicInfoT
+   if (file.IoControl(IOCTRL_SEEK_POSSIBLE, NULL) != 1)
+     ioctx->seekable = 0;
+ 
+-  FFMPEG_FMT_CONST AVInputFormat* iformat = nullptr;
++  const AVInputFormat* iformat = nullptr;
+   av_probe_input_buffer(ioctx, &iformat, strFileName.c_str(), NULL, 0, 0);
+ 
+   if (avformat_open_input(&fctx, strFileName.c_str(), iformat, NULL) < 0)
+diff --git a/xbmc/video/tags/VideoTagLoaderFFmpeg.cpp b/xbmc/video/tags/VideoTagLoaderFFmpeg.cpp
+index 5564696be6..9fa3687b5e 100644
+--- a/xbmc/video/tags/VideoTagLoaderFFmpeg.cpp
++++ b/xbmc/video/tags/VideoTagLoaderFFmpeg.cpp
+@@ -65,7 +65,7 @@ CVideoTagLoaderFFmpeg::CVideoTagLoaderFFmpeg(const CFileItem& item,
+   if (m_file->IoControl(IOCTRL_SEEK_POSSIBLE, nullptr) != 1)
+     m_ioctx->seekable = 0;
+ 
+-  FFMPEG_FMT_CONST AVInputFormat* iformat = nullptr;
++  const AVInputFormat* iformat = nullptr;
+   av_probe_input_buffer(m_ioctx, &iformat, m_item.GetPath().c_str(), nullptr, 0, 0);
+   if (avformat_open_input(&m_fctx, m_item.GetPath().c_str(), iformat, nullptr) < 0)
+   {
+-- 
+2.38.0
+
+
+From 4a8bcd8eab54cd6d9e2009516a2b0cf03654265b Mon Sep 17 00:00:00 2001
+From: Vasyl Gello <vasek.gello@gmail.com>
+Date: Tue, 18 Oct 2022 05:47:22 +0000
+Subject: [PATCH 5/7] Bump depends-build ffmpeg version to 5.1.2
+
+Signed-off-by: Vasyl Gello <vasek.gello@gmail.com>
+---
+ tools/depends/target/ffmpeg/FFMPEG-VERSION | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/tools/depends/target/ffmpeg/FFMPEG-VERSION b/tools/depends/target/ffmpeg/FFMPEG-VERSION
+index 2c9eda8750..d80ab0a81d 100644
+--- a/tools/depends/target/ffmpeg/FFMPEG-VERSION
++++ b/tools/depends/target/ffmpeg/FFMPEG-VERSION
+@@ -1,5 +1,5 @@
+ LIBNAME=ffmpeg
+ BASE_URL=https://github.com/xbmc/FFmpeg
+-VERSION=4.4.1-Nexus-Alpha1
++VERSION=5.1.2-Nexus-Alpha3
+ ARCHIVE=$(LIBNAME)-$(VERSION).tar.gz
+-SHA512=8beb04d577b5251e74b0d52f4d130997a8ba94bbd488c7c8309e6b45095c27807e150212888ce3a384b23dff52f8df1a7bde5407bae924ddc363f8125c0616c5
++SHA512=ce60852b8456d6f4bfc60de0ceadb33034d9b3eea8c0bc84d8b7199984ecbf334a2c4d9b42eade439d0ef30ce22e3b2ca0a49d4df837a18cd3136b4343ed3113
+-- 
+2.38.0
+
+
+From 48d4f598e48420659ab80bce07963846bb7c5214 Mon Sep 17 00:00:00 2001
+From: Vasyl Gello <vasek.gello@gmail.com>
+Date: Sun, 30 Oct 2022 07:11:06 +0000
+Subject: [PATCH 6/7] Disable broken filter for darwin_embedded
+
+Signed-off-by: Vasyl Gello <vasek.gello@gmail.com>
+---
+ tools/depends/target/ffmpeg/CMakeLists.txt | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/tools/depends/target/ffmpeg/CMakeLists.txt b/tools/depends/target/ffmpeg/CMakeLists.txt
+index f09258058b..1739bc2cfd 100644
+--- a/tools/depends/target/ffmpeg/CMakeLists.txt
++++ b/tools/depends/target/ffmpeg/CMakeLists.txt
+@@ -92,6 +92,7 @@ elseif(CORE_SYSTEM_NAME STREQUAL android)
+ elseif(CORE_SYSTEM_NAME STREQUAL darwin_embedded)
+   list(APPEND ffmpeg_conf --disable-crystalhd
+                           --enable-videotoolbox
++                          --disable-filter=yadif_videotoolbox
+                           --target-os=darwin
+               )
+ elseif(CORE_SYSTEM_NAME STREQUAL osx)
+-- 
+2.38.0
+
+
+From c09ca60986d48b3a67e359b7d00393e1abcbb932 Mon Sep 17 00:00:00 2001
+From: thexai <58434170+thexai@users.noreply.github.com>
+Date: Sun, 30 Oct 2022 19:32:14 +0100
+Subject: [PATCH 7/7] Updates FFmpeg Windows patches
+
+---
+ .../0001-ffmpeg-windows-configure-detect-openssl.patch      | 2 +-
+ .../0002-ffmpeg-windows-configure-fix-zlib-conflict.patch   | 6 +++---
+ ...003-ffmpeg-windows-configure-allow-building-static.patch | 4 ++--
+ .../0004-ffmpeg-windows-configure-detect-libdav1d.patch     | 2 +-
+ 4 files changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/tools/buildsteps/windows/patches/0001-ffmpeg-windows-configure-detect-openssl.patch b/tools/buildsteps/windows/patches/0001-ffmpeg-windows-configure-detect-openssl.patch
+index b8e5b2f7e1..29f5a83e16 100644
+--- a/tools/buildsteps/windows/patches/0001-ffmpeg-windows-configure-detect-openssl.patch
++++ b/tools/buildsteps/windows/patches/0001-ffmpeg-windows-configure-detect-openssl.patch
+@@ -11,7 +11,7 @@ diff --git a/configure b/configure
+ index d7a3f507e8..4b85e881b1 100755
+ --- a/configure
+ +++ b/configure
+-@@ -6530,6 +6530,8 @@ enabled openssl           && { check_pkg_config openssl openssl openssl/ssl.h OP
++@@ -6728,6 +6728,8 @@ enabled openssl           && { check_pkg_config openssl openssl openssl/ssl.h OP
+                                 check_lib openssl openssl/ssl.h SSL_library_init -lssl -lcrypto ||
+                                 check_lib openssl openssl/ssl.h SSL_library_init -lssl32 -leay32 ||
+                                 check_lib openssl openssl/ssl.h SSL_library_init -lssl -lcrypto -lws2_32 -lgdi32 ||
+diff --git a/tools/buildsteps/windows/patches/0002-ffmpeg-windows-configure-fix-zlib-conflict.patch b/tools/buildsteps/windows/patches/0002-ffmpeg-windows-configure-fix-zlib-conflict.patch
+index 064be1ddd3..2a7c8f6897 100644
+--- a/tools/buildsteps/windows/patches/0002-ffmpeg-windows-configure-fix-zlib-conflict.patch
++++ b/tools/buildsteps/windows/patches/0002-ffmpeg-windows-configure-fix-zlib-conflict.patch
+@@ -11,16 +11,16 @@ diff --git a/configure b/configure
+ index 4b85e881b1..da457705d1 100755
+ --- a/configure
+ +++ b/configure
+-@@ -7627,6 +7627,9 @@ print_config CONFIG_ "$config_files" $CONFIG_LIST       \
++@@ -7825,6 +7825,9 @@ print_config CONFIG_ "$config_files" $CONFIG_LIST       \
++ print_config CONFIG_ "$config_files" $CONFIG_LIST       \
+                                       $CONFIG_EXTRA      \
+-                                      $ALL_COMPONENTS    \
+  
+ +echo "#if defined(HAVE_UNISTD_H) && HAVE_UNISTD_H == 0" >> $TMPH
+ +echo "#undef HAVE_UNISTD_H" >> $TMPH
+ +echo "#endif" >> $TMPH
+  echo "#endif /* FFMPEG_CONFIG_H */" >> $TMPH
+- echo "endif # FFMPEG_CONFIG_MAK" >> ffbuild/config.mak
+  
++ # Do not overwrite an unchanged config.h to avoid superfluous rebuilds.
+ -- 
+ 2.29.2
+ 
+diff --git a/tools/buildsteps/windows/patches/0003-ffmpeg-windows-configure-allow-building-static.patch b/tools/buildsteps/windows/patches/0003-ffmpeg-windows-configure-allow-building-static.patch
+index bbb3e0a9f6..0dee8c9d04 100644
+--- a/tools/buildsteps/windows/patches/0003-ffmpeg-windows-configure-allow-building-static.patch
++++ b/tools/buildsteps/windows/patches/0003-ffmpeg-windows-configure-allow-building-static.patch
+@@ -11,7 +11,7 @@ diff --git a/configure b/configure
+ index da457705d1..e3a8f45ff4 100755
+ --- a/configure
+ +++ b/configure
+-@@ -5440,6 +5440,8 @@ case $target_os in
++@@ -5566,6 +5566,8 @@ case $target_os in
+          enabled shared && ! enabled small && test_cmd $windres --version && enable gnu_windres
+          enabled x86_32 && check_ldflags -Wl,--large-address-aware
+          shlibdir_default="$bindir_default"
+@@ -20,7 +20,7 @@ index da457705d1..e3a8f45ff4 100755
+          SLIBPREF=""
+          SLIBSUF=".dll"
+          SLIBNAME_WITH_VERSION='$(SLIBPREF)$(FULLNAME)-$(LIBVERSION)$(SLIBSUF)'
+-@@ -5489,6 +5491,8 @@ case $target_os in
++@@ -5615,6 +5617,8 @@ case $target_os in
+          fi
+          enabled x86_32 && check_ldflags -LARGEADDRESSAWARE
+          shlibdir_default="$bindir_default"
+diff --git a/tools/buildsteps/windows/patches/0004-ffmpeg-windows-configure-detect-libdav1d.patch b/tools/buildsteps/windows/patches/0004-ffmpeg-windows-configure-detect-libdav1d.patch
+index 617c87a8b0..e5a90d090a 100644
+--- a/tools/buildsteps/windows/patches/0004-ffmpeg-windows-configure-detect-libdav1d.patch
++++ b/tools/buildsteps/windows/patches/0004-ffmpeg-windows-configure-detect-libdav1d.patch
+@@ -11,7 +11,7 @@ diff --git a/configure b/configure
+ index e3a8f45ff4..983d7e1078 100755
+ --- a/configure
+ +++ b/configure
+-@@ -6358,7 +6358,7 @@ enabled libcelt           && require libcelt celt/celt.h celt_decode -lcelt0 &&
++@@ -6541,7 +6541,7 @@ enabled libcelt           && require libcelt celt/celt.h celt_decode -lcelt0 &&
+                                 die "ERROR: libcelt must be installed and version must be >= 0.11.0."; }
+  enabled libcaca           && require_pkg_config libcaca caca caca.h caca_create_canvas
+  enabled libcodec2         && require libcodec2 codec2/codec2.h codec2_create -lcodec2
+-- 
+2.38.0
+
