@@ -1,4 +1,4 @@
-From d38cb51a9362250b53aa9c7637b17d90718f5f65 Mon Sep 17 00:00:00 2001
+From 5da35e93bf63167dcb2c2b3b0534a7c1aead1623 Mon Sep 17 00:00:00 2001
 From: Jernej Skrabec <jernej.skrabec@siol.net>
 Date: Tue, 3 Dec 2019 21:01:18 +0100
 Subject: [PATCH] Add V4L2 m2m deinterlace filter
@@ -12,10 +12,10 @@ Signed-off-by: Alex Bee <knaerzche@gmail.com>
  create mode 100644 libavfilter/vf_deinterlace_v4l2m2m.c
 
 diff --git a/libavfilter/Makefile b/libavfilter/Makefile
-index b3d3d981dd..9103e3b395 100644
+index 994d9773ba..aa8e012b5e 100644
 --- a/libavfilter/Makefile
 +++ b/libavfilter/Makefile
-@@ -262,6 +262,7 @@ OBJS-$(CONFIG_DEFLATE_FILTER)                += vf_neighbor.o
+@@ -271,6 +271,7 @@ OBJS-$(CONFIG_DEFLATE_FILTER)                += vf_neighbor.o
  OBJS-$(CONFIG_DEFLICKER_FILTER)              += vf_deflicker.o
  OBJS-$(CONFIG_DEINTERLACE_QSV_FILTER)        += vf_vpp_qsv.o
  OBJS-$(CONFIG_DEINTERLACE_VAAPI_FILTER)      += vf_deinterlace_vaapi.o vaapi_vpp.o
@@ -24,10 +24,10 @@ index b3d3d981dd..9103e3b395 100644
  OBJS-$(CONFIG_DELOGO_FILTER)                 += vf_delogo.o
  OBJS-$(CONFIG_DENOISE_VAAPI_FILTER)          += vf_misc_vaapi.o vaapi_vpp.o
 diff --git a/libavfilter/allfilters.c b/libavfilter/allfilters.c
-index d7db46c2af..075f065f3c 100644
+index 149bf50997..9461b4085a 100644
 --- a/libavfilter/allfilters.c
 +++ b/libavfilter/allfilters.c
-@@ -240,6 +240,7 @@ extern const AVFilter ff_vf_dedot;
+@@ -248,6 +248,7 @@ extern const AVFilter ff_vf_dedot;
  extern const AVFilter ff_vf_deflate;
  extern const AVFilter ff_vf_deflicker;
  extern const AVFilter ff_vf_deinterlace_qsv;
@@ -37,7 +37,7 @@ index d7db46c2af..075f065f3c 100644
  extern const AVFilter ff_vf_delogo;
 diff --git a/libavfilter/vf_deinterlace_v4l2m2m.c b/libavfilter/vf_deinterlace_v4l2m2m.c
 new file mode 100644
-index 0000000000..ff5ed500a9
+index 0000000000..10d65382fe
 --- /dev/null
 +++ b/libavfilter/vf_deinterlace_v4l2m2m.c
 @@ -0,0 +1,1009 @@
@@ -818,7 +818,7 @@ index 0000000000..ff5ed500a9
 +    if (err < 0)
 +        goto fail_out1;
 +
-+    output_frame_1->interlaced_frame = 0;
++    output_frame_1->flags &= ~AV_FRAME_FLAG_INTERLACED;
 +
 +    output_frame_2 = av_frame_alloc();
 +    if (!output_frame_2) {
@@ -836,7 +836,7 @@ index 0000000000..ff5ed500a9
 +    if (err < 0)
 +        goto fail_out2;
 +
-+    output_frame_2->interlaced_frame = 0;
++    output_frame_2->flags &= ~AV_FRAME_FLAG_INTERLACED;
 +
 +    if (ctx->prev_in_frame && ctx->prev_in_frame->pts != AV_NOPTS_VALUE
 +       && input_frame->pts != AV_NOPTS_VALUE) {
@@ -920,7 +920,7 @@ index 0000000000..ff5ed500a9
 +    int ret;
 +
 +    av_log(priv, AV_LOG_DEBUG, "input pts: %"PRId64" field :%d interlaced: %d\n",
-+          in->pts, in->top_field_first, in->interlaced_frame);
++          in->pts, !!(in->flags & AV_FRAME_FLAG_TOP_FIELD_FIRST), !!(in->flags & AV_FRAME_FLAG_INTERLACED));
 +
 +    ctx->cur_in_frame = in;
 +
@@ -931,7 +931,7 @@ index 0000000000..ff5ed500a9
 +        ctx->drm_in_format = drm_desc->layers->format;
 +        ctx->drm_out_format = drm_desc->layers->format;
 +
-+	if (in->top_field_first)
++	if (!!(in->flags & AV_FRAME_FLAG_TOP_FIELD_FIRST))
 +            ctx->field_order = V4L2_FIELD_INTERLACED_TB;
 +        else
 +            ctx->field_order = V4L2_FIELD_INTERLACED_BT;
@@ -1050,3 +1050,6 @@ index 0000000000..ff5ed500a9
 +    FILTER_OUTPUTS(deint_v4l2m2m_outputs),
 +    .priv_class     = &deinterlace_v4l2m2m_class,
 +};
+-- 
+2.45.2
+

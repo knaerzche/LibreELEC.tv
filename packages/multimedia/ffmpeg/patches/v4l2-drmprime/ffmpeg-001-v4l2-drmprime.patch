@@ -1,4 +1,4 @@
-From d08054c6eb2bb041e554b9fa24013d521f7ff024 Mon Sep 17 00:00:00 2001
+From 2eb62e4943859db7a1238b0cfb30b8aba1fc5cfc Mon Sep 17 00:00:00 2001
 From: Lukas Rusak <lorusak@gmail.com>
 Date: Tue, 24 Apr 2018 23:00:23 -0700
 Subject: [PATCH 1/8] libavcodec: v4l2m2m: output AVDRMFrameDescriptor
@@ -42,7 +42,7 @@ V5:
  5 files changed, 213 insertions(+), 12 deletions(-)
 
 diff --git a/libavcodec/v4l2_buffers.c b/libavcodec/v4l2_buffers.c
-index 3f5471067a..07662b5fc3 100644
+index 2277135699..0b01de67d5 100644
 --- a/libavcodec/v4l2_buffers.c
 +++ b/libavcodec/v4l2_buffers.c
 @@ -21,6 +21,7 @@
@@ -233,7 +233,7 @@ index 3f5471067a..07662b5fc3 100644
      }
  
      /* fixup special cases */
-@@ -542,9 +675,6 @@ int ff_v4l2_buffer_initialize(V4L2Buffer* avbuf, int index)
+@@ -543,9 +676,6 @@ int ff_v4l2_buffer_initialize(V4L2Buffer* avbuf, int index)
  
      avbuf->status = V4L2BUF_AVAILABLE;
  
@@ -243,7 +243,7 @@ index 3f5471067a..07662b5fc3 100644
      if (V4L2_TYPE_IS_MULTIPLANAR(ctx->type)) {
          avbuf->buf.m.planes = avbuf->planes;
          avbuf->buf.length   = avbuf->num_planes;
-@@ -554,6 +684,15 @@ int ff_v4l2_buffer_initialize(V4L2Buffer* avbuf, int index)
+@@ -555,6 +685,15 @@ int ff_v4l2_buffer_initialize(V4L2Buffer* avbuf, int index)
          avbuf->buf.length    = avbuf->planes[0].length;
      }
  
@@ -282,10 +282,10 @@ index 3d2ff1b9a5..b82c990dcc 100644
       * of how many context-refs we are holding. */
      AVBufferRef *context_ref;
 diff --git a/libavcodec/v4l2_context.c b/libavcodec/v4l2_context.c
-index a40be94690..5bbab77c1e 100644
+index f20f713e1d..22038b2a0c 100644
 --- a/libavcodec/v4l2_context.c
 +++ b/libavcodec/v4l2_context.c
-@@ -441,22 +441,54 @@ static int v4l2_release_buffers(V4L2Context* ctx)
+@@ -445,22 +445,54 @@ static int v4l2_release_buffers(V4L2Context* ctx)
      struct v4l2_requestbuffers req = {
          .memory = V4L2_MEMORY_MMAP,
          .type = ctx->type,
@@ -359,7 +359,7 @@ index 04d86d7b92..4251efcb86 100644
  
  typedef struct V4L2m2mPriv {
 diff --git a/libavcodec/v4l2_m2m_dec.c b/libavcodec/v4l2_m2m_dec.c
-index 4944d08511..9a2b922fb1 100644
+index aa2d759e1e..b8dc4eb81f 100644
 --- a/libavcodec/v4l2_m2m_dec.c
 +++ b/libavcodec/v4l2_m2m_dec.c
 @@ -23,6 +23,9 @@
@@ -410,18 +410,21 @@ index 4944d08511..9a2b922fb1 100644
  #define M2MDEC_CLASS(NAME) \
      static const AVClass v4l2_m2m_ ## NAME ## _dec_class = { \
          .class_name = #NAME "_v4l2m2m_decoder", \
-@@ -254,6 +274,9 @@ static const AVOption options[] = {
-         .p.capabilities = AV_CODEC_CAP_HARDWARE | AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING, \
+@@ -255,6 +275,9 @@ static const AVOption options[] = {
          .caps_internal  = FF_CODEC_CAP_NOT_INIT_THREADSAFE | \
-                           FF_CODEC_CAP_SETS_PKT_DTS | FF_CODEC_CAP_INIT_CLEANUP, \
+                           FF_CODEC_CAP_INIT_CLEANUP, \
+         .p.wrapper_name = "v4l2m2m", \
 +        .p.pix_fmts     = (const enum AVPixelFormat[]) { AV_PIX_FMT_DRM_PRIME, \
 +                                                         AV_PIX_FMT_NONE}, \
 +        .hw_configs     = v4l2_m2m_hw_configs, \
-         .p.wrapper_name = "v4l2m2m", \
      }
  
+ M2MDEC(h264,  "H.264", AV_CODEC_ID_H264,       "h264_mp4toannexb");
+-- 
+2.45.2
 
-From bb9db9b85e0f1c99a4b6cd9bea2d86ce64af05b5 Mon Sep 17 00:00:00 2001
+
+From 76f3e509ff74d35e04bc49f03d765353fda9d094 Mon Sep 17 00:00:00 2001
 From: Lukas Rusak <lorusak@gmail.com>
 Date: Thu, 16 Aug 2018 21:09:40 -0700
 Subject: [PATCH 2/8] libavcodec: v4l2m2m: depends on libdrm
@@ -432,10 +435,10 @@ Subject: [PATCH 2/8] libavcodec: v4l2m2m: depends on libdrm
  2 files changed, 2 insertions(+), 1 deletion(-)
 
 diff --git a/configure b/configure
-index b6616f00b6..09a824a579 100755
+index 86425130bd..10043c386a 100755
 --- a/configure
 +++ b/configure
-@@ -3549,6 +3549,7 @@ sndio_indev_deps="sndio"
+@@ -3702,6 +3702,7 @@ sndio_indev_deps="sndio"
  sndio_outdev_deps="sndio"
  v4l2_indev_deps_any="linux_videodev2_h sys_videoio_h"
  v4l2_indev_suggest="libv4l2"
@@ -444,7 +447,7 @@ index b6616f00b6..09a824a579 100755
  v4l2_outdev_suggest="libv4l2"
  vfwcap_indev_deps="vfw32 vfwcap_defines"
 diff --git a/libavcodec/v4l2_buffers.c b/libavcodec/v4l2_buffers.c
-index 07662b5fc3..d41558527c 100644
+index 0b01de67d5..2eb6f041d9 100644
 --- a/libavcodec/v4l2_buffers.c
 +++ b/libavcodec/v4l2_buffers.c
 @@ -21,7 +21,7 @@
@@ -456,8 +459,11 @@ index 07662b5fc3..d41558527c 100644
  #include <linux/videodev2.h>
  #include <sys/ioctl.h>
  #include <sys/mman.h>
+-- 
+2.45.2
 
-From 22928b7f1ae1054f303a50c60f9fc5f5d0c7c08b Mon Sep 17 00:00:00 2001
+
+From 7dc6fb17df8069d6c7ce7361678130091c25357d Mon Sep 17 00:00:00 2001
 From: Lukas Rusak <lorusak@gmail.com>
 Date: Thu, 16 Aug 2018 21:10:13 -0700
 Subject: [PATCH 3/8] libavcodec: v4l2m2m: set format_modifier to
@@ -468,7 +474,7 @@ Subject: [PATCH 3/8] libavcodec: v4l2m2m: set format_modifier to
  1 file changed, 2 insertions(+)
 
 diff --git a/libavcodec/v4l2_buffers.c b/libavcodec/v4l2_buffers.c
-index d41558527c..95c8a1e409 100644
+index 2eb6f041d9..1884dc1831 100644
 --- a/libavcodec/v4l2_buffers.c
 +++ b/libavcodec/v4l2_buffers.c
 @@ -327,10 +327,12 @@ static int v4l2_buffer_export_drm(V4L2Buffer* avbuf)
@@ -484,8 +490,11 @@ index d41558527c..95c8a1e409 100644
          }
      }
  
+-- 
+2.45.2
 
-From 87182c63602793c3310b207400bf77c8f2d0d1d8 Mon Sep 17 00:00:00 2001
+
+From 7fa7a1d577764a3fde7d0a3f98b1bb7ae2a7f42d Mon Sep 17 00:00:00 2001
 From: Lukas Rusak <lorusak@gmail.com>
 Date: Thu, 16 Aug 2018 21:10:53 -0700
 Subject: [PATCH 4/8] libavcodec: v4l2m2m: only mmap the buffer when it is
@@ -496,10 +505,10 @@ Subject: [PATCH 4/8] libavcodec: v4l2m2m: only mmap the buffer when it is
  1 file changed, 14 insertions(+), 6 deletions(-)
 
 diff --git a/libavcodec/v4l2_buffers.c b/libavcodec/v4l2_buffers.c
-index 95c8a1e409..0a65f32cb2 100644
+index 1884dc1831..e0bcac93b4 100644
 --- a/libavcodec/v4l2_buffers.c
 +++ b/libavcodec/v4l2_buffers.c
-@@ -661,14 +661,22 @@ int ff_v4l2_buffer_initialize(V4L2Buffer* avbuf, int index)
+@@ -662,14 +662,22 @@ int ff_v4l2_buffer_initialize(V4L2Buffer* avbuf, int index)
  
          if (V4L2_TYPE_IS_MULTIPLANAR(ctx->type)) {
              avbuf->plane_info[i].length = avbuf->buf.m.planes[i].length;
@@ -528,8 +537,11 @@ index 95c8a1e409..0a65f32cb2 100644
          }
  
          if (avbuf->plane_info[i].mm_addr == MAP_FAILED)
+-- 
+2.45.2
 
-From edc89c1d0214e9fbc3c33ea26efe9a86456931c4 Mon Sep 17 00:00:00 2001
+
+From 4aba4b8cdcd218894779999d30d5e0390fed9610 Mon Sep 17 00:00:00 2001
 From: Lukas Rusak <lorusak@gmail.com>
 Date: Thu, 16 Aug 2018 21:11:38 -0700
 Subject: [PATCH 5/8] libavcodec: v4l2m2m: allow using software pixel formats
@@ -539,7 +551,7 @@ Subject: [PATCH 5/8] libavcodec: v4l2m2m: allow using software pixel formats
  1 file changed, 10 insertions(+), 1 deletion(-)
 
 diff --git a/libavcodec/v4l2_m2m_dec.c b/libavcodec/v4l2_m2m_dec.c
-index 9a2b922fb1..11b893cc65 100644
+index b8dc4eb81f..28b29c4522 100644
 --- a/libavcodec/v4l2_m2m_dec.c
 +++ b/libavcodec/v4l2_m2m_dec.c
 @@ -217,8 +217,16 @@ static av_cold int v4l2_decode_init(AVCodecContext *avctx)
@@ -560,16 +572,19 @@ index 9a2b922fb1..11b893cc65 100644
  
      s->avctx = avctx;
      ret = ff_v4l2_m2m_codec_init(priv);
-@@ -275,6 +283,7 @@ static const AVCodecHWConfigInternal *v4l2_m2m_hw_configs[] = {
-         .caps_internal  = FF_CODEC_CAP_NOT_INIT_THREADSAFE | \
-                           FF_CODEC_CAP_SETS_PKT_DTS | FF_CODEC_CAP_INIT_CLEANUP, \
+@@ -276,6 +284,7 @@ static const AVCodecHWConfigInternal *v4l2_m2m_hw_configs[] = {
+                           FF_CODEC_CAP_INIT_CLEANUP, \
+         .p.wrapper_name = "v4l2m2m", \
          .p.pix_fmts     = (const enum AVPixelFormat[]) { AV_PIX_FMT_DRM_PRIME, \
 +                                                         AV_PIX_FMT_NV12, \
                                                           AV_PIX_FMT_NONE}, \
          .hw_configs     = v4l2_m2m_hw_configs, \
-         .p.wrapper_name = "v4l2m2m", \
+     }
+-- 
+2.45.2
 
-From 180e12f23b20ff358956fd6cb24db665535cad04 Mon Sep 17 00:00:00 2001
+
+From bdd6a01cf901f88fc929e011e478e10365af4ff9 Mon Sep 17 00:00:00 2001
 From: Lukas Rusak <lorusak@gmail.com>
 Date: Mon, 24 Sep 2018 13:39:31 -0700
 Subject: [PATCH 6/8] libavcodec: v4l2m2m: implement hwcontext
@@ -582,7 +597,7 @@ Subject: [PATCH 6/8] libavcodec: v4l2m2m: implement hwcontext
  4 files changed, 37 insertions(+)
 
 diff --git a/libavcodec/v4l2_buffers.c b/libavcodec/v4l2_buffers.c
-index 0a65f32cb2..a040d418d9 100644
+index e0bcac93b4..57cff57891 100644
 --- a/libavcodec/v4l2_buffers.c
 +++ b/libavcodec/v4l2_buffers.c
 @@ -434,6 +434,7 @@ static int v4l2_buffer_buf_to_swframe(AVFrame *frame, V4L2Buffer *avbuf)
@@ -593,7 +608,7 @@ index 0a65f32cb2..a040d418d9 100644
      } else {
          /* 1. get references to the actual data */
          for (i = 0; i < avbuf->num_planes; i++) {
-@@ -634,6 +635,27 @@ int ff_v4l2_buffer_initialize(V4L2Buffer* avbuf, int index)
+@@ -635,6 +636,27 @@ int ff_v4l2_buffer_initialize(V4L2Buffer* avbuf, int index)
      avbuf->buf.type = ctx->type;
      avbuf->buf.index = index;
  
@@ -648,7 +663,7 @@ index 4251efcb86..1082b9dad2 100644
      int output_drm;
  } V4L2m2mContext;
 diff --git a/libavcodec/v4l2_m2m_dec.c b/libavcodec/v4l2_m2m_dec.c
-index 11b893cc65..6f67aabcbd 100644
+index 28b29c4522..a5dc926232 100644
 --- a/libavcodec/v4l2_m2m_dec.c
 +++ b/libavcodec/v4l2_m2m_dec.c
 @@ -35,6 +35,7 @@
@@ -676,8 +691,11 @@ index 11b893cc65..6f67aabcbd 100644
      s->avctx = avctx;
      ret = ff_v4l2_m2m_codec_init(priv);
      if (ret) {
+-- 
+2.45.2
 
-From 8c64981ace0a08bdc7eb445125a70f691ed829cb Mon Sep 17 00:00:00 2001
+
+From a457bf5eaec3e88eca853c8263cf0d38712a7610 Mon Sep 17 00:00:00 2001
 From: Lukas Rusak <lorusak@gmail.com>
 Date: Wed, 6 May 2020 11:12:58 -0700
 Subject: [PATCH 7/8] libavcodec: v4l2m2m: add option to specify pixel format
@@ -690,10 +708,10 @@ Subject: [PATCH 7/8] libavcodec: v4l2m2m: add option to specify pixel format
  3 files changed, 12 insertions(+)
 
 diff --git a/libavcodec/v4l2_context.c b/libavcodec/v4l2_context.c
-index 5bbab77c1e..3bd1f37c75 100644
+index 22038b2a0c..955d90e853 100644
 --- a/libavcodec/v4l2_context.c
 +++ b/libavcodec/v4l2_context.c
-@@ -517,6 +517,8 @@ static inline int v4l2_try_raw_format(V4L2Context* ctx, enum AVPixelFormat pixfm
+@@ -521,6 +521,8 @@ static inline int v4l2_try_raw_format(V4L2Context* ctx, enum AVPixelFormat pixfm
  
  static int v4l2_get_raw_format(V4L2Context* ctx, enum AVPixelFormat *p)
  {
@@ -702,7 +720,7 @@ index 5bbab77c1e..3bd1f37c75 100644
      enum AVPixelFormat pixfmt = ctx->av_pix_fmt;
      struct v4l2_fmtdesc fdesc;
      int ret;
-@@ -535,6 +537,13 @@ static int v4l2_get_raw_format(V4L2Context* ctx, enum AVPixelFormat *p)
+@@ -539,6 +541,13 @@ static int v4l2_get_raw_format(V4L2Context* ctx, enum AVPixelFormat *p)
          if (ret)
              return AVERROR(EINVAL);
  
@@ -737,7 +755,7 @@ index 1082b9dad2..943a8923c4 100644
  
  /**
 diff --git a/libavcodec/v4l2_m2m_dec.c b/libavcodec/v4l2_m2m_dec.c
-index 6f67aabcbd..279f26cbe6 100644
+index a5dc926232..a8f707ba4e 100644
 --- a/libavcodec/v4l2_m2m_dec.c
 +++ b/libavcodec/v4l2_m2m_dec.c
 @@ -261,6 +261,7 @@ static const AVOption options[] = {
@@ -748,8 +766,11 @@ index 6f67aabcbd..279f26cbe6 100644
      { NULL},
  };
  
+-- 
+2.45.2
 
-From 807bf8da5fa9f28443b5eee9429fb2478171e8f7 Mon Sep 17 00:00:00 2001
+
+From 0ea7c2db38daa1edeff5399af3d4da01205bf9b2 Mon Sep 17 00:00:00 2001
 From: Lukas Rusak <lorusak@gmail.com>
 Date: Mon, 24 Sep 2018 13:39:56 -0700
 Subject: [PATCH 8/8] libavcodec: v4l2m2m: implement flush
@@ -759,7 +780,7 @@ Subject: [PATCH 8/8] libavcodec: v4l2m2m: implement flush
  1 file changed, 36 insertions(+)
 
 diff --git a/libavcodec/v4l2_m2m_dec.c b/libavcodec/v4l2_m2m_dec.c
-index 279f26cbe6..8f1dd4a886 100644
+index a8f707ba4e..5f992f0e7f 100644
 --- a/libavcodec/v4l2_m2m_dec.c
 +++ b/libavcodec/v4l2_m2m_dec.c
 @@ -254,6 +254,41 @@ static av_cold int v4l2_decode_close(AVCodecContext *avctx)
@@ -812,3 +833,6 @@ index 279f26cbe6..8f1dd4a886 100644
          .bsfs           = bsf_name, \
          .p.capabilities = AV_CODEC_CAP_HARDWARE | AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING, \
          .caps_internal  = FF_CODEC_CAP_NOT_INIT_THREADSAFE | \
+-- 
+2.45.2
+
